@@ -8,9 +8,11 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const AUTH_DIR = `${__dirname}/../auth`;
-const QR_PNG_PATH = `${__dirname}/../qr.png`;
+const INSTANCE = process.env.INSTANCE_NAME || 'default';
+const AUTH_DIR = `${__dirname}/../auth/${INSTANCE}`;
+const QR_PNG_PATH = `${__dirname}/../qr-${INSTANCE}.png`;
 const GROUP_NAME = process.env.GROUP_NAME || 'Jarvis';
+const TAG = `[jarvis:${INSTANCE}]`;
 const logger = pino({ level: 'silent' });
 
 function extractText(msg) {
@@ -35,19 +37,19 @@ export async function startWhatsApp() {
       if (match) {
         if (jarvisJid !== match.id) {
           jarvisJid = match.id;
-          console.log(`[jarvis] Grupo "${GROUP_NAME}" encontrado, escutando mensagens.`);
+          console.log(`${TAG} Grupo "${GROUP_NAME}" encontrado, escutando mensagens.`);
         }
       } else if (list.length > 0) {
         console.warn(
-          `[jarvis] Nenhum grupo chamado "${GROUP_NAME}" entre os ${list.length} grupos encontrados: ${list
+          `${TAG} Nenhum grupo chamado "${GROUP_NAME}" entre os ${list.length} grupos encontrados: ${list
             .map((g) => JSON.stringify(g.subject))
             .join(', ')}`,
         );
       } else {
-        console.warn('[jarvis] Ainda não vejo nenhum grupo (sincronizando com o WhatsApp)...');
+        console.warn(`${TAG} Ainda não vejo nenhum grupo (sincronizando com o WhatsApp)...`);
       }
     } catch (err) {
-      console.error('[jarvis] Erro ao buscar grupos:', err.message);
+      console.error(`${TAG} Erro ao buscar grupos:`, err.message);
     }
   }
 
@@ -68,14 +70,14 @@ export async function startWhatsApp() {
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
       if (qr) {
-        console.log('\n[jarvis] Escaneie o QR code no WhatsApp (Aparelhos conectados > Conectar um aparelho):\n');
+        console.log(`\n${TAG} Escaneie o QR code no WhatsApp (Aparelhos conectados > Conectar um aparelho):\n`);
         qrcodeTerminal.generate(qr, { small: true });
         QRCode.toFile(QR_PNG_PATH, qr, { width: 640, margin: 3 }).catch((err) =>
-          console.error('[jarvis] Erro ao gerar qr.png:', err.message),
+          console.error(`${TAG} Erro ao gerar ${QR_PNG_PATH}:`, err.message),
         );
       }
       if (connection === 'open') {
-        console.log('[jarvis] Conectado ao WhatsApp.');
+        console.log(`${TAG} Conectado ao WhatsApp.`);
         if (existsSync(QR_PNG_PATH)) unlinkSync(QR_PNG_PATH);
         resolveJarvisJid();
         setTimeout(resolveJarvisJid, 5000);
@@ -85,9 +87,11 @@ export async function startWhatsApp() {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = statusCode === DisconnectReason.loggedOut;
         if (loggedOut) {
-          console.error('[jarvis] Sessão desconectada pelo celular. Apague a pasta "auth" e rode novamente para reconectar com um novo QR code.');
+          console.error(
+            `${TAG} Sessão desconectada pelo celular. Apague a pasta "auth/${INSTANCE}" e rode novamente para reconectar com um novo QR code.`,
+          );
         } else {
-          console.log(`[jarvis] Conexão perdida (code ${statusCode}), reconectando...`);
+          console.log(`${TAG} Conexão perdida (code ${statusCode}), reconectando...`);
           connect();
         }
       }

@@ -1,65 +1,66 @@
 # Jarvis WhatsApp
 
-Assistente pessoal que conecta no seu WhatsApp (via WhatsApp Web, biblioteca não-oficial [Baileys](https://github.com/WhiskeySockets/Baileys)) e conversa com você dentro do grupo **Jarvis**: cria lembretes de tarefas/reuniões, avisa na hora certa e te dá ideias quando você pedir. O "cérebro" é o Gemini (Google AI).
+Assistente pessoal que conecta no WhatsApp (via WhatsApp Web, biblioteca não-oficial [Baileys](https://github.com/WhiskeySockets/Baileys)) e conversa dentro de um grupo dedicado: cria lembretes de tarefas/reuniões, avisa na hora certa e dá ideias quando pedido. O "cérebro" é o Gemini (Google AI).
+
+Roda como **múltiplas instâncias independentes na mesma máquina**: cada pessoa conecta o próprio celular (via QR code) a uma instância só dela, com grupo, histórico de conversa e lista de tarefas totalmente isolados das outras. A máquina (e a chave de API do Gemini) é compartilhada; os dados e sessões de WhatsApp, não.
 
 > Isso usa uma biblioteca não-oficial que automatiza o WhatsApp Web. Não é a API oficial do WhatsApp Business. Use por sua conta e risco (é o método padrão para bots pessoais, mas tecnicamente viola os termos de uso do WhatsApp — risco baixo pra uso pessoal moderado, mas existe).
+>
+> **Transparência pra quem for conectar o celular:** as mensagens de cada pessoa passam pela chave de Gemini de quem administra a máquina (consumo/billing aparece pra ela) e ficam salvas em texto puro no disco dessa máquina (`data/<instância>.json`). Só conecte gente que tope isso.
 
 ## 1. Pré-requisitos
 
-- Ter um grupo no WhatsApp chamado **Jarvis** com você (pode ser só você nele).
-- Uma chave de API do Gemini: crie em https://aistudio.google.com/apikey (gratuito, com limites de uso).
+- Uma chave de API do Gemini: crie em https://aistudio.google.com/apikey (gratuito, com limites de uso). Pode ser uma só, compartilhada entre todas as instâncias.
+- Node.js instalado na máquina que vai rodar tudo.
 
-## 2. Configurar
+## 2. Adicionar uma pessoa (uma instância)
 
-1. Abra o arquivo [.env](.env) e cole sua chave:
+1. A pessoa cria um grupo no WhatsApp dela (com qualquer nome, ex: "Jarvis") e te passa o nome exato do grupo (incluindo emoji, se tiver).
+2. Copie `instances/example.env` para `instances/<nome-da-pessoa>.env` (ex: `instances/maria.env`) e preencha:
    ```
    GEMINI_API_KEY=sua_chave_aqui
+   GEMINI_MODEL=gemini-2.5-flash
+   GROUP_NAME=nome_exato_do_grupo_dela
    ```
-2. Se o seu grupo tiver outro nome (não "Jarvis"), ajuste `GROUP_NAME` no mesmo arquivo.
+3. Rode essa instância sozinha pela primeira vez, pra fazer o pareamento:
+   ```bash
+   node src/index.js <nome-da-pessoa>
+   ```
+4. Vai aparecer um **QR code no terminal** — a pessoa escaneia com o próprio celular dela (WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho). Se o QR ficar ilegível no terminal, o programa também salva um arquivo `qr-<nome-da-pessoa>.png` na pasta do projeto — abra e escaneie nele.
+5. Depois de conectar, pode parar esse processo (Ctrl+C) e subir todo mundo junto (próximo passo) — a sessão fica salva em `auth/<nome-da-pessoa>/` e não precisa escanear de novo (a não ser que a pessoa desconecte o aparelho pelo próprio celular).
 
-## 3. Rodar
+## 3. Rodar todo mundo junto
 
 ```bash
-npm start
+npm run start:all
 ```
 
-Na primeira vez vai aparecer um **QR code no terminal**. No celular: WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho, e escaneie. Se o QR ficar ilegível no terminal (fonte pequena, cores), o programa também salva um arquivo `qr.png` na pasta do projeto — abra esse arquivo e escaneie nele.
+Isso sobe um processo para cada instância configurada em `instances/*.env` ao mesmo tempo, cada uma isolada (sessão de WhatsApp, histórico de conversa com o Gemini e `data/<nome>.json` próprios). Os logs de todas aparecem juntos no mesmo terminal, prefixados com `[jarvis:<nome>]`.
 
-Depois de conectar, a sessão fica salva na pasta `auth/` e não precisa escanear de novo (a não ser que desconecte o aparelho pelo celular).
+Pra rodar só uma pessoa: `node src/index.js <nome-da-pessoa>` (ou `npm start -- <nome-da-pessoa>`).
 
-Deixe o terminal/PC rodando — o bot só funciona enquanto o processo `npm start` estiver ativo.
+Deixe o terminal/PC rodando — o bot só funciona enquanto o processo estiver ativo.
 
 ## 4. Como usar
 
-Fale naturalmente no grupo Jarvis, por exemplo:
+Cada pessoa fala naturalmente no próprio grupo, por exemplo:
 
-- `me lembra de ligar pro cliente hoje às 17h` → ele cria o lembrete e avisa no grupo na hora.
+- `me lembra de ligar pro cliente hoje às 17h` → cria o lembrete e avisa no grupo na hora.
 - `tenho reunião com o time quinta às 10h, pauta: revisão do projeto` → cria o lembrete com os detalhes.
 - `o que eu tenho pendente?` → lista as tarefas/lembretes em aberto.
 - `terminei a tarefa de ligar pro cliente` → marca como concluída.
 - `cancela o lembrete da reunião de quinta` → remove.
-- `me dá 5 ideias pra organizar o lançamento do produto` → ele responde direto com sugestões, sem precisar criar nada.
+- `me dá 5 ideias pra organizar o lançamento do produto` → responde direto com sugestões, sem precisar criar nada.
 
-Os lembretes são checados a cada minuto; quando chega a hora, o Jarvis manda a mensagem de aviso no grupo sozinho.
+Os lembretes são checados a cada minuto; quando chega a hora, o Jarvis manda a mensagem de aviso sozinho, prefixada com "🤖 *Jarvis:*" (pra diferenciar das mensagens enviadas por você mesmo, já que o bot usa a mesma conta/WhatsApp da pessoa).
 
 ## 5. Dados
 
-- `auth/` — sessão do WhatsApp (não apague, a não ser que queira reconectar do zero).
-- `data/tasks.json` — suas tarefas/lembretes (criado automaticamente).
-
-Nenhum dado sai da sua máquina, exceto o texto das mensagens enviado ao Gemini para gerar as respostas.
+- `auth/<nome>/` — sessão do WhatsApp daquela pessoa (não apague, a não ser que queira reconectar do zero).
+- `data/<nome>.json` — tarefas/lembretes daquela pessoa (criado automaticamente).
+- `instances/<nome>.env` — configuração daquela pessoa (chave Gemini, nome do grupo). **Não é versionado no git** (fica só nesta máquina).
 
 ## 6. Problemas comuns
 
-- **Desconectou / parou de responder**: o terminal mostra o motivo. Se disser "sessão desconectada", apague a pasta `auth/` e rode `npm start` de novo para gerar um novo QR code.
-- **"Grupo não encontrado"**: o nome em `GROUP_NAME` precisa ser **idêntico** ao nome do grupo no WhatsApp, incluindo emojis (ex: `Jarvis🧠` ≠ `Jarvis`). O log mostra a lista de grupos encontrados se não bater.
-
-## 7. Dar isso pra outra pessoa usar
-
-Cada pessoa precisa da sua **própria cópia rodando** (seu próprio PC, sua própria sessão de WhatsApp, sua própria chave Gemini) — não dá pra uma instância só atender várias contas de WhatsApp ao mesmo tempo. Pra replicar:
-
-1. Copie a pasta do projeto (sem as pastas `auth/`, `data/` e sem o arquivo `.env` — cada pessoa cria os seus).
-2. A pessoa roda `npm install`, cria o grupo no WhatsApp dela (qualquer nome), copia `.env.example` para `.env` e preenche `GEMINI_API_KEY` e `GROUP_NAME` com o nome exato do grupo dela.
-3. `npm start` e ela escaneia o QR code com o próprio celular.
-
-Como cada cópia roda isolada (processo, sessão de WhatsApp e `tasks.json` separados), não existe risco de misturar tarefas ou conversas entre pessoas diferentes.
+- **Desconectou / parou de responder**: o log daquela instância mostra o motivo. Se disser "sessão desconectada", apague a pasta `auth/<nome>/` e rode `node src/index.js <nome>` de novo para gerar um novo QR code.
+- **"Grupo não encontrado"**: o `GROUP_NAME` precisa ser **idêntico** ao nome do grupo no WhatsApp, incluindo emojis (ex: `Jarvis🧠` ≠ `Jarvis`). O log mostra a lista de grupos encontrados se não bater.

@@ -1,6 +1,7 @@
 node_modules/
 auth/
 data/
-.env
+instances/*.env
+!instances/example.env
 run.log
-qr.png
+qr-*.png

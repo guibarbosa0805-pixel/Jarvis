@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_FILE = `${__dirname}/../data/tasks.json`;
+const INSTANCE = process.env.INSTANCE_NAME || 'default';
+const DATA_FILE = `${__dirname}/../data/${INSTANCE}.json`;
 
 function ensureDataFile() {
   const dir = dirname(DATA_FILE);
