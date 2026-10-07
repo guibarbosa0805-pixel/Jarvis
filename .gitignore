@@ -1,0 +1,6 @@
+node_modules/
+auth/
+data/
+.env
+run.log
+qr.png
