@@ -26,8 +26,10 @@ Roda como **múltiplas instâncias independentes na mesma máquina**: cada pesso
    ```bash
    node src/index.js <nome-da-pessoa>
    ```
-4. Vai aparecer um **QR code no terminal** — a pessoa escaneia com o próprio celular dela (WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho). Se o QR ficar ilegível no terminal, o programa também salva um arquivo `qr-<nome-da-pessoa>.png` na pasta do projeto — abra e escaneie nele.
-5. Depois de conectar, pode parar esse processo (Ctrl+C) e subir todo mundo junto (próximo passo) — a sessão fica salva em `auth/<nome-da-pessoa>/` e não precisa escanear de novo (a não ser que a pessoa desconecte o aparelho pelo próprio celular).
+4. Pareie o celular dela — duas formas, sem precisar estar perto da máquina que roda o bot:
+   - **QR code** (padrão, se `PHONE_NUMBER` não estiver no `.env` dela): aparece no terminal, e também salvo como imagem em `qr-<nome-da-pessoa>.png`. Ela escaneia em WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho.
+   - **Código de pareamento, sem QR** (defina `PHONE_NUMBER=5511999999999` — só dígitos, com DDI — no `.env` dela antes de rodar): o terminal mostra um código tipo `ABCD-1234`. Você manda esse código por texto pra ela (WhatsApp, SMS, o que for), e ela digita em WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho > "Conectar com número de telefone". Mais prático quando ela não está do seu lado.
+5. Depois de conectar, pode parar esse processo (Ctrl+C) e subir todo mundo junto (próximo passo) — a sessão fica salva em `auth/<nome-da-pessoa>/` e não precisa parear de novo (a não ser que a pessoa desconecte o aparelho pelo próprio celular).
 
 ## 3. Rodar todo mundo junto
 

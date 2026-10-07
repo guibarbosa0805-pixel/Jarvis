@@ -12,6 +12,7 @@ const INSTANCE = process.env.INSTANCE_NAME || 'default';
 const AUTH_DIR = `${__dirname}/../auth/${INSTANCE}`;
 const QR_PNG_PATH = `${__dirname}/../qr-${INSTANCE}.png`;
 const GROUP_NAME = process.env.GROUP_NAME || 'Jarvis';
+const PHONE_NUMBER = (process.env.PHONE_NUMBER || '').replace(/\D/g, '') || null;
 const TAG = `[jarvis:${INSTANCE}]`;
 const logger = pino({ level: 'silent' });
 
@@ -67,9 +68,22 @@ export async function startWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    if (PHONE_NUMBER && !state.creds.registered) {
+      try {
+        const rawCode = await sock.requestPairingCode(PHONE_NUMBER);
+        const pretty = rawCode.match(/.{1,4}/g)?.join('-') ?? rawCode;
+        console.log(`\n${TAG} Código de pareamento (sem QR): ${pretty}`);
+        console.log(
+          `${TAG} No celular: WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho > "Conectar com número de telefone" e digite esse código.\n`,
+        );
+      } catch (err) {
+        console.error(`${TAG} Erro ao gerar código de pareamento:`, err.message);
+      }
+    }
+
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
-      if (qr) {
+      if (qr && !PHONE_NUMBER) {
         console.log(`\n${TAG} Escaneie o QR code no WhatsApp (Aparelhos conectados > Conectar um aparelho):\n`);
         qrcodeTerminal.generate(qr, { small: true });
         QRCode.toFile(QR_PNG_PATH, qr, { width: 640, margin: 3 }).catch((err) =>
@@ -88,7 +102,7 @@ export async function startWhatsApp() {
         const loggedOut = statusCode === DisconnectReason.loggedOut;
         if (loggedOut) {
           console.error(
-            `${TAG} Sessão desconectada pelo celular. Apague a pasta "auth/${INSTANCE}" e rode novamente para reconectar com um novo QR code.`,
+            `${TAG} Sessão desconectada pelo celular. Apague a pasta "auth/${INSTANCE}" e rode novamente para parear de novo (QR ou código, conforme PHONE_NUMBER).`,
           );
         } else {
           console.log(`${TAG} Conexão perdida (code ${statusCode}), reconectando...`);
