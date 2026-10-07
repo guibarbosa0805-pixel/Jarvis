@@ -139,14 +139,20 @@
     <label>Nome (identificador, sem espaços)</label>
     <input name="name" placeholder="ex: maria" required pattern="[a-zA-Z0-9_-]+" />
 
-    <label>Nome exato do grupo no WhatsApp dela</label>
-    <input name="groupName" placeholder="ex: Jarvis🧠" required />
+    <label>Nome de exibição (como ela quer ser chamada nas mensagens)</label>
+    <input name="displayName" placeholder="ex: Maria" />
+
+    <label>Nome exato do grupo no WhatsApp dela (opcional — deixe vazio pra usar a conversa "Mensagens para você mesmo", sem precisar criar grupo)</label>
+    <input name="groupName" placeholder="ex: Jarvis🧠 (ou deixe vazio)" />
 
     <label>Telefone (opcional — só dígitos com DDI, ex: 5511999999999). Deixe vazio pra usar QR code.</label>
     <input name="phoneNumber" placeholder="5511999999999" />
 
     <label>Chave de API do Gemini</label>
     <input name="geminiApiKey" placeholder="AQ...." required />
+
+    <label>Horário do resumo matinal (HH:mm, opcional)</label>
+    <input name="digestTime" placeholder="07:30" value="07:30" />
 
     <div class="error-msg" id="addError"></div>
     <div class="dialog-actions">
@@ -202,7 +208,7 @@ function render(instances) {
 
     card.innerHTML = `
       <div class="name">${inst.name}</div>
-      <div class="group">${inst.groupName || '(sem grupo configurado)'}</div>
+      <div class="group">${inst.groupName || '💬 conversa com você mesmo'}</div>
       <span class="badge ${badge.cls}">${badge.text}</span>
       ${extra}
       <div class="row">
@@ -287,9 +293,11 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
   const form = e.target;
   const payload = {
     name: form.name.value.trim(),
+    displayName: form.displayName.value.trim(),
     groupName: form.groupName.value.trim(),
     phoneNumber: form.phoneNumber.value.trim(),
     geminiApiKey: form.geminiApiKey.value.trim(),
+    digestTime: form.digestTime.value.trim(),
   };
   const res = await fetch('/api/instances', {
     method: 'POST',

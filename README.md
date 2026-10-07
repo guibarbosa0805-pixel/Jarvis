@@ -1,6 +1,6 @@
 # Jarvis WhatsApp
 
-Assistente pessoal que conecta no WhatsApp (via WhatsApp Web, biblioteca não-oficial [Baileys](https://github.com/WhiskeySockets/Baileys)) e conversa dentro de um grupo dedicado: cria lembretes de tarefas/reuniões, avisa na hora certa e dá ideias quando pedido. O "cérebro" é o Gemini (Google AI).
+Assistente pessoal (secretário) que conecta no WhatsApp (via WhatsApp Web, biblioteca não-oficial [Baileys](https://github.com/WhiskeySockets/Baileys)) e conversa numa conversa dedicada: cria lembretes de tarefas/reuniões (com link, se houver), avisa com antecedência e na hora exata, manda um resumo da agenda pela manhã, e dá ideias quando pedido. O "cérebro" é o Gemini (Google AI).
 
 Roda como **múltiplas instâncias independentes na mesma máquina**: cada pessoa conecta o próprio celular (via QR code) a uma instância só dela, com grupo, histórico de conversa e lista de tarefas totalmente isolados das outras. A máquina (e a chave de API do Gemini) é compartilhada; os dados e sessões de WhatsApp, não.
 
@@ -21,7 +21,7 @@ npm run panel
 
 Abre um painel web em **http://localhost:4545** (só acessível desta máquina). Nele dá pra:
 
-- **Adicionar pessoa**: formulário com nome, grupo do WhatsApp dela, chave Gemini (já vem preenchida com a mesma chave de quem já existe) e telefone opcional (pra usar código de pareamento em vez de QR).
+- **Adicionar pessoa**: formulário com nome, nome de exibição, chave Gemini (já vem preenchida com a mesma chave de quem já existe), telefone opcional (pra usar código de pareamento em vez de QR) e grupo do WhatsApp **opcional** — se deixar vazio, usa a conversa "Mensagens para você mesmo" dela, sem precisar criar grupo nenhum.
 - Ver o **QR code ou código de pareamento na tela**, ao vivo, assim que a instância sobe.
 - **Iniciar/Parar** cada instância individualmente, ou todas de uma vez ("Iniciar todas").
 - Ver **logs** de cada uma em tempo real.
@@ -31,12 +31,14 @@ Deixe esse processo rodando (`npm run panel`) — ele mantém as instâncias viv
 
 ## 3. Alternativa: linha de comando
 
-1. A pessoa cria um grupo no WhatsApp dela (com qualquer nome, ex: "Jarvis") e te passa o nome exato do grupo (incluindo emoji, se tiver).
+1. Decida: ela vai falar com o Jarvis num **grupo** dedicado (com qualquer nome) ou na própria conversa **"Mensagens para você mesmo"** (não precisa criar nada)?
 2. Copie `instances/example.env` para `instances/<nome-da-pessoa>.env` (ex: `instances/maria.env`) e preencha:
    ```
    GEMINI_API_KEY=sua_chave_aqui
    GEMINI_MODEL=gemini-2.5-flash
-   GROUP_NAME=nome_exato_do_grupo_dela
+   DISPLAY_NAME=Maria
+   GROUP_NAME=nome_exato_do_grupo_dela   # deixe vazio para usar "Mensagens para você mesmo"
+   DIGEST_TIME=07:30                      # horário do resumo matinal; vazio = sem resumo
    ```
 3. Rode essa instância sozinha pela primeira vez, pra fazer o pareamento:
    ```bash
@@ -57,16 +59,53 @@ Em ambos os casos, deixe o processo rodando — o bot só funciona enquanto esti
 
 ## 4. Como usar
 
-Cada pessoa fala naturalmente no próprio grupo, por exemplo:
+Cada pessoa fala naturalmente na própria conversa (grupo ou "Mensagens para você mesmo"), por exemplo:
 
-- `me lembra de ligar pro cliente hoje às 17h` → cria o lembrete e avisa no grupo na hora.
+- `masterclass sobre dados hoje às 19:30 https://link-do-evento` → cria o lembrete, extrai o link sozinho e confirma:
+  ```
+  ✅ Agendado, Guilherme!
+
+  📅 masterclass sobre dados
+  📆 07/10 às 19:30
+  ⏰ Lembrete: 19:00
+  🔗 Link: https://link-do-evento
+
+  Fico de olho pra te lembrar! 😉
+  ```
 - `tenho reunião com o time quinta às 10h, pauta: revisão do projeto` → cria o lembrete com os detalhes.
 - `o que eu tenho pendente?` → lista as tarefas/lembretes em aberto.
 - `terminei a tarefa de ligar pro cliente` → marca como concluída.
 - `cancela o lembrete da reunião de quinta` → remove.
 - `me dá 5 ideias pra organizar o lançamento do produto` → responde direto com sugestões, sem precisar criar nada.
 
-Os lembretes são checados a cada minuto; quando chega a hora, o Jarvis manda a mensagem de aviso sozinho, prefixada com "🤖 *Jarvis:*" (pra diferenciar das mensagens enviadas por você mesmo, já que o bot usa a mesma conta/WhatsApp da pessoa).
+Pra cada compromisso com horário, o Jarvis manda **dois** avisos automáticos (checados a cada minuto), sempre prefixados com "🤖 *Jarvis:*" (pra diferenciar das suas próprias mensagens, já que o bot usa a mesma conta/WhatsApp):
+
+- **Com antecedência** (30 min antes por padrão — dá pra pedir outro valor, ex: "me avisa 1h antes"):
+  ```
+  ⏰ Lembrete: faltam 30 min!
+
+  📅 masterclass sobre dados
+  📆 07/10 às 19:30
+  🔗 Link: https://link-do-evento
+  ```
+- **Na hora exata**:
+  ```
+  Lembrete, AGORA!:
+  masterclass sobre dados
+
+  Data e hora:
+  📅 07/10/2026 19:30
+  ```
+
+Se `DIGEST_TIME` estiver configurado, todo dia nesse horário o Jarvis manda um resumo da agenda do dia (só se houver algo marcado):
+```
+Oii Guilherme 😊, tudo bem?
+
+Agendamento(s) de hoje:
+
+📅 09:00 - Visita Vonex
+📅 11:00 - Reunião Eleven
+```
 
 ## 5. Dados
 
@@ -77,4 +116,4 @@ Os lembretes são checados a cada minuto; quando chega a hora, o Jarvis manda a 
 ## 6. Problemas comuns
 
 - **Desconectou / parou de responder**: o log daquela instância mostra o motivo. Se disser "sessão desconectada", apague a pasta `auth/<nome>/` e rode `node src/index.js <nome>` de novo para gerar um novo QR code.
-- **"Grupo não encontrado"**: o `GROUP_NAME` precisa ser **idêntico** ao nome do grupo no WhatsApp, incluindo emojis (ex: `Jarvis🧠` ≠ `Jarvis`). O log mostra a lista de grupos encontrados se não bater.
+- **"Grupo não encontrado"** (só se `GROUP_NAME` estiver preenchido): precisa ser **idêntico** ao nome do grupo no WhatsApp, incluindo emojis (ex: `Jarvis🧠` ≠ `Jarvis`). O log mostra a lista de grupos encontrados se não bater. Deixando `GROUP_NAME` vazio esse problema não existe (usa a conversa "Mensagens para você mesmo").

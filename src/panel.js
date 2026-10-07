@@ -141,20 +141,18 @@ app.get('/api/instances/:name/logs', (req, res) => {
 });
 
 app.post('/api/instances', (req, res) => {
-  const { name, groupName, geminiApiKey, geminiModel, phoneNumber } = req.body || {};
+  const { name, groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber } = req.body || {};
   if (!name || !/^[a-z0-9_-]+$/i.test(name)) {
     return res.status(400).json({ error: 'Nome inválido. Use só letras, números, - e _.' });
   }
-  if (!groupName) return res.status(400).json({ error: 'Nome do grupo é obrigatório.' });
   if (!geminiApiKey) return res.status(400).json({ error: 'Chave Gemini é obrigatória.' });
   const envPath = `${INSTANCES_DIR}/${name}.env`;
   if (existsSync(envPath)) return res.status(409).json({ error: 'Já existe uma instância com esse nome.' });
 
-  const lines = [
-    `GEMINI_API_KEY=${geminiApiKey}`,
-    `GEMINI_MODEL=${geminiModel || 'gemini-2.5-flash'}`,
-    `GROUP_NAME=${groupName}`,
-  ];
+  const lines = [`GEMINI_API_KEY=${geminiApiKey}`, `GEMINI_MODEL=${geminiModel || 'gemini-2.5-flash'}`];
+  if (displayName) lines.push(`DISPLAY_NAME=${displayName}`);
+  if (groupName) lines.push(`GROUP_NAME=${groupName}`);
+  lines.push(`DIGEST_TIME=${digestTime || '07:30'}`);
   if (phoneNumber) lines.push(`PHONE_NUMBER=${String(phoneNumber).replace(/\D/g, '')}`);
   writeFileSync(envPath, lines.join('\n') + '\n', 'utf8');
   res.json({ ok: true });

@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, jidNormalizedUser } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
 import QRCode from 'qrcode';
@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const INSTANCE = process.env.INSTANCE_NAME || 'default';
 const AUTH_DIR = `${__dirname}/../auth/${INSTANCE}`;
 const QR_PNG_PATH = `${__dirname}/../qr-${INSTANCE}.png`;
-const GROUP_NAME = process.env.GROUP_NAME || 'Jarvis';
+const GROUP_NAME = (process.env.GROUP_NAME || '').trim() || null;
 const PHONE_NUMBER = (process.env.PHONE_NUMBER || '').replace(/\D/g, '') || null;
 const TAG = `[jarvis:${INSTANCE}]`;
 const logger = pino({ level: 'silent' });
@@ -32,6 +32,14 @@ export async function startWhatsApp() {
   let jarvisJid = null;
 
   async function resolveJarvisJid() {
+    if (!GROUP_NAME) {
+      if (!jarvisJid && sock?.user?.id) {
+        jarvisJid = jidNormalizedUser(sock.user.id);
+        console.log(`${TAG} Sem grupo configurado — usando a conversa "Mensagens para você mesmo".`);
+        writeStatus(INSTANCE, { groupFound: true, groupName: '(conversa com você mesmo)' });
+      }
+      return;
+    }
     try {
       const groups = await sock.groupFetchAllParticipating();
       const list = Object.values(groups);
@@ -59,7 +67,13 @@ export async function startWhatsApp() {
 
   async function sendToJarvis(text) {
     if (!jarvisJid) await resolveJarvisJid();
-    if (!jarvisJid) throw new Error(`Grupo "${GROUP_NAME}" não encontrado. Crie um grupo com esse nome no WhatsApp.`);
+    if (!jarvisJid) {
+      throw new Error(
+        GROUP_NAME
+          ? `Grupo "${GROUP_NAME}" não encontrado. Crie um grupo com esse nome no WhatsApp.`
+          : 'Ainda não consegui identificar a conversa "Mensagens para você mesmo".',
+      );
+    }
     const sent = await sock.sendMessage(jarvisJid, { text: `🤖 *Jarvis:* ${text}` });
     if (sent?.key?.id) sentIds.add(sent.key.id);
     return sent;

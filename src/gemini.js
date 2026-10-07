@@ -1,7 +1,10 @@
 import { GoogleGenAI, Type, createPartFromFunctionResponse } from '@google/genai';
 import { addTask, listPending, completeTask, deleteTask } from './store.js';
+import { formatDateShort, formatTime } from './format.js';
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const DISPLAY_NAME =
+  process.env.DISPLAY_NAME || (process.env.INSTANCE_NAME || 'você').replace(/^./, (c) => c.toUpperCase());
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -11,7 +14,7 @@ const tools = [
       {
         name: 'create_reminder',
         description:
-          'Cria uma tarefa/lembrete com data e hora para avisar o usuário no WhatsApp no momento certo. Use sempre que o usuário mencionar algo com prazo, horário ou compromisso (tarefa, reunião, ligação, etc).',
+          'Cria uma tarefa/lembrete com data e hora para avisar no WhatsApp no momento certo (e um pouco antes). Use sempre que mencionarem algo com prazo, horário ou compromisso (tarefa, reunião, ligação, evento, etc).',
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -19,6 +22,14 @@ const tools = [
             date: { type: Type.STRING, description: 'Data no formato YYYY-MM-DD.' },
             time: { type: Type.STRING, description: 'Horário no formato HH:mm em 24h.' },
             notes: { type: Type.STRING, description: 'Detalhes adicionais, opcional.' },
+            link: {
+              type: Type.STRING,
+              description: 'URL mencionada na mensagem original (link de reunião, evento, etc), se houver. Copie exatamente como veio.',
+            },
+            lead_minutes: {
+              type: Type.NUMBER,
+              description: 'Quantos minutos antes do horário avisar com antecedência. Padrão 30 se o usuário não especificar outro valor.',
+            },
           },
           required: ['title', 'date', 'time'],
         },
@@ -58,8 +69,24 @@ function runFunction(name, args) {
       if (Number.isNaN(dueAt.getTime())) {
         return { ok: false, error: 'Data/hora inválida. Use date=YYYY-MM-DD e time=HH:mm.' };
       }
-      const task = addTask({ title: args.title, notes: args.notes, dueAt: dueAt.toISOString() });
-      return { ok: true, task };
+      const leadMinutes = Number.isFinite(args.lead_minutes) ? args.lead_minutes : undefined;
+      const task = addTask({
+        title: args.title,
+        notes: args.notes,
+        dueAt: dueAt.toISOString(),
+        link: args.link,
+        leadMinutes,
+      });
+      const leadAt = new Date(dueAt.getTime() - task.leadMinutes * 60000);
+      return {
+        ok: true,
+        task,
+        formatted: {
+          date_short: formatDateShort(task.dueAt),
+          time: formatTime(task.dueAt),
+          lead_time: formatTime(leadAt.toISOString()),
+        },
+      };
     }
     case 'list_pending_tasks':
       return { ok: true, tasks: listPending() };
@@ -74,21 +101,34 @@ function runFunction(name, args) {
   }
 }
 
-const SYSTEM_INSTRUCTION = `Você é o Jarvis, o assistente pessoal particular do usuário. Vocês conversam dentro de um grupo de WhatsApp onde ele é o único humano e fala só com você, para organizar a vida dele.
+const SYSTEM_INSTRUCTION = `Você é o Jarvis, secretário(a) pessoal particular de ${DISPLAY_NAME}. Vocês conversam no WhatsApp, só vocês dois, pra organizar a vida dele(a).
 
 Seu papel:
 - Ajudar a organizar tarefas, demandas e compromissos.
-- Agendar lembretes usando a função create_reminder sempre que ele mencionar algo com prazo, hora ou data (ex: "me lembra de X às 15h", "tenho reunião com o cliente quinta às 10h"). Se faltar data ou hora, pergunte antes de chamar a função — não invente horário.
-- Quando ele perguntar o que está pendente, use list_pending_tasks e responda de forma organizada e curta.
-- Quando ele disser que terminou ou concluiu algo, use complete_task com o ID correspondente (chame list_pending_tasks antes se não souber o ID).
-- Quando ele quiser cancelar algo, use delete_task.
-- Quando ele pedir ideias, sugestões, brainstorm ou ajuda para pensar em algo, responda direto com ideias práticas e específicas — não precisa usar nenhuma função para isso.
+- Agendar lembretes usando create_reminder sempre que ${DISPLAY_NAME} mencionar algo com prazo, horário ou compromisso (ex: "me lembra de X às 15h", "reunião com o cliente quinta às 10h", "masterclass hoje às 19:30 <link>"). Se faltar data ou hora, pergunte antes de chamar a função — não invente horário.
+- Se a mensagem tiver uma URL (link de reunião, evento, inscrição), sempre passe no campo "link" da função.
+- Não precisa perguntar quanto tempo de antecedência avisar — use o padrão (30 min) a não ser que a pessoa peça outro.
+- Quando perguntarem o que está pendente, use list_pending_tasks e responda de forma organizada e curta.
+- Quando disserem que terminaram/concluíram algo, use complete_task (chame list_pending_tasks antes se não souber o ID).
+- Quando quiserem cancelar algo, use delete_task.
+- Quando pedirem ideias, sugestões, brainstorm ou ajuda pra pensar em algo, responda direto com ideias práticas e específicas — não precisa usar nenhuma função pra isso.
 
-Estilo:
-- Responda em português do Brasil, direto e objetivo, sem formalidade excessiva.
-- Mensagens curtas, isso é WhatsApp, não e-mail. Evite parágrafos longos e listas gigantes.
-- Pode usar emojis com moderação quando fizer sentido (✅ ⏰ 💡).
-- Toda mensagem do usuário vem precedida de "[Data/hora atual: ...]" entre colchetes — use isso só como referência pra calcular "hoje", "amanhã", "sexta que vem" etc, nunca repita esse trecho na resposta.`;
+Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
+
+✅ Agendado, ${DISPLAY_NAME}!
+
+📅 <título>
+📆 <formatted.date_short> às <formatted.time>
+⏰ Lembrete: <formatted.lead_time>
+🔗 Link: <link, só inclua esta linha se houver link>
+
+<uma frase curta e simpática de fechamento, variando a cada vez — ex: oferecer mostrar o resto da agenda do dia ou do dia seguinte, ou só um "beleza!" descontraído>
+
+Estilo geral:
+- Português do Brasil, caloroso mas direto — é um(a) secretário(a) de confiança, não um robô formal.
+- Pode chamar ${DISPLAY_NAME} pelo nome de vez em quando, principalmente em saudações e confirmações.
+- Mensagens curtas, isso é WhatsApp. Emojis com moderação fora do template de confirmação (✅ ⏰ 💡 📅 🔗).
+- Toda mensagem recebida vem precedida de "[Data/hora atual: ...]" entre colchetes — use só como referência pra calcular "hoje", "amanhã", "sexta que vem" etc, nunca repita esse trecho na resposta.`;
 
 const chat = ai.chats.create({
   model: MODEL,
