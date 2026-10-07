@@ -6,137 +6,209 @@
 <title>Painel do Jarvis</title>
 <style>
   :root {
-    --bg: #0f1115;
-    --card: #171a21;
-    --border: #262b36;
-    --text: #e6e8eb;
-    --muted: #9aa3b2;
-    --accent: #4f8cff;
-    --green: #35c56a;
-    --yellow: #e2b93b;
-    --red: #e25555;
+    --bg: #0b0d11;
+    --surface: #13161c;
+    --surface-2: #1a1e26;
+    --border: #232833;
+    --border-strong: #323948;
+    --text: #e8eaed;
+    --text-muted: #8b93a3;
+    --text-faint: #5b6373;
+    --accent: #5b7cfa;
+    --accent-hover: #6f8bfb;
+    --success: #35c56a;
+    --warning: #e0a63d;
+    --danger: #e8596a;
+    --radius: 10px;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
+    -webkit-font-smoothing: antialiased;
   }
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px 28px;
+    padding: 18px 32px;
     border-bottom: 1px solid var(--border);
   }
-  header h1 { font-size: 20px; margin: 0; }
-  header .actions { display: flex; gap: 10px; }
-  main { padding: 24px 28px; max-width: 1000px; margin: 0 auto; }
-  button {
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
     background: var(--accent);
     color: white;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 14px;
-    font-size: 14px;
-    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.5px;
   }
-  button.secondary { background: #2a2f3a; }
-  button.danger { background: var(--red); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .brand h1 { font-size: 16px; margin: 0; font-weight: 600; line-height: 1.2; }
+  .brand p { font-size: 12px; margin: 0; color: var(--text-muted); line-height: 1.2; }
+  .actions { display: flex; gap: 10px; }
+
+  main { padding: 28px 32px; max-width: 1040px; margin: 0 auto; }
+
+  .btn {
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-secondary { background: transparent; border-color: var(--border-strong); color: var(--text); }
+  .btn-secondary:hover { border-color: var(--text-muted); }
+  .btn-danger { background: transparent; border-color: var(--border-strong); color: var(--danger); }
+  .btn-danger:hover { background: rgba(232, 89, 106, 0.08); border-color: var(--danger); }
+  .btn-danger-solid { background: var(--danger); color: white; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 16px;
-    margin-top: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    gap: 14px;
+    margin-top: 20px;
   }
   .card {
-    background: var(--card);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
+    border-radius: var(--radius);
+    padding: 18px;
   }
-  .card .name { font-size: 16px; font-weight: 600; }
-  .card .group { color: var(--muted); font-size: 13px; margin-top: 2px; }
-  .badge {
-    display: inline-block;
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    margin-top: 8px;
-  }
-  .badge.off { background: #2a2f3a; color: var(--muted); }
-  .badge.wait { background: #3a331a; color: var(--yellow); }
-  .badge.ok { background: #16321f; color: var(--green); }
-  .badge.err { background: #3a1a1a; color: var(--red); }
-  .card .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .card img.qr { width: 100%; max-width: 220px; margin-top: 12px; border-radius: 6px; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .card-title { font-size: 15px; font-weight: 600; }
+  .card-meta { color: var(--text-muted); font-size: 13px; margin-top: 3px; }
+
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot.off { background: var(--text-faint); }
+  .dot.wait { background: var(--warning); }
+  .dot.ok { background: var(--success); }
+  .dot.err { background: var(--danger); }
+
+  .card-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .card-actions .btn { padding: 6px 11px; font-size: 12.5px; }
+
+  .qr-box { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface-2); }
+  .qr-box img { display: block; width: 100%; border-radius: 4px; }
   .pairing-code {
-    margin-top: 12px;
-    font-size: 22px;
-    letter-spacing: 2px;
-    font-weight: 700;
-    color: var(--yellow);
-    background: #2a2416;
-    padding: 8px 10px;
-    border-radius: 6px;
+    margin-top: 14px;
+    font-size: 21px;
+    letter-spacing: 3px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    border-radius: 8px;
     text-align: center;
   }
-  .empty { color: var(--muted); margin-top: 24px; }
+
+  .empty {
+    color: var(--text-muted);
+    margin-top: 48px;
+    text-align: center;
+    font-size: 14px;
+    padding: 40px 20px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+  }
+
   dialog {
-    background: var(--card);
+    background: var(--surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 20px;
-    width: 420px;
+    border-radius: var(--radius);
+    padding: 22px;
+    width: 440px;
     max-width: 90vw;
   }
-  dialog::backdrop { background: rgba(0,0,0,0.6); }
-  dialog h2 { margin-top: 0; font-size: 17px; }
+  dialog::backdrop { background: rgba(5, 6, 9, 0.7); }
+  dialog h2 { margin: 0 0 18px; font-size: 16px; font-weight: 600; }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .section-label:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+
   label { display: block; font-size: 13px; font-weight: 600; margin-top: 14px; margin-bottom: 2px; }
-  .help { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .help { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 5px; line-height: 1.4; }
   input {
     width: 100%;
     padding: 8px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: #0f1115;
+    border-radius: 7px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
     color: var(--text);
-    font-size: 14px;
+    font-size: 13.5px;
   }
-  dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-  .error-msg { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 16px; }
+  input:focus { outline: none; border-color: var(--accent); }
+
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+  .error-msg { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
+
   #logsPre {
-    background: #0b0d11;
+    background: var(--bg);
+    border: 1px solid var(--border);
     padding: 12px;
-    border-radius: 6px;
+    border-radius: 8px;
     max-height: 50vh;
     overflow: auto;
     font-size: 12px;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
     white-space: pre-wrap;
     word-break: break-all;
+    color: var(--text-muted);
   }
   #logsDialog { width: 640px; }
+
+  dialog p.body-text { color: var(--text-muted); font-size: 13.5px; line-height: 1.55; margin: 0; }
 </style>
 </head>
 <body>
 <header>
-  <h1>🤖 Painel do Jarvis</h1>
+  <div class="brand">
+    <span class="logo">J</span>
+    <div>
+      <h1>Jarvis</h1>
+      <p>Painel de administração</p>
+    </div>
+  </div>
   <div class="actions">
-    <button class="secondary" id="startAllBtn">Conectar todo mundo</button>
-    <button id="addBtn">+ Adicionar pessoa</button>
+    <button class="btn btn-secondary" id="startAllBtn">Conectar todo mundo</button>
+    <button class="btn btn-primary" id="addBtn">Adicionar pessoa</button>
   </div>
 </header>
 <main>
   <div class="grid" id="grid"></div>
-  <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "+ Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
+  <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
 </main>
 
 <dialog id="addDialog">
   <h2>Adicionar pessoa</h2>
   <form id="addForm">
+    <div class="section-label">Identificação</div>
+
     <label>Identificador</label>
     <small class="help">Sem espaços, só letras/números — ex: maria. É só uso interno, ela não vê isso.</small>
     <input name="name" placeholder="ex: maria" required pattern="[a-zA-Z0-9_-]+" />
@@ -145,13 +217,17 @@
     <small class="help">Como o Jarvis vai chamá-la nas mensagens.</small>
     <input name="displayName" placeholder="ex: Maria" />
 
+    <div class="section-label">WhatsApp</div>
+
     <label>Conversa</label>
     <small class="help">Nome exato do grupo dela no WhatsApp. Vazio = usa "Mensagens para você mesmo", sem precisar criar grupo.</small>
-    <input name="groupName" placeholder="ex: Jarvis🧠 (ou deixe vazio)" />
+    <input name="groupName" placeholder="ex: Jarvis (ou deixe vazio)" />
 
     <label>Telefone</label>
     <small class="help">Opcional, só dígitos com DDI (ex: 5511999999999) — pareia por código em vez de QR. Vazio = QR code.</small>
     <input name="phoneNumber" placeholder="5511999999999" />
+
+    <div class="section-label">Configuração</div>
 
     <label>Chave de API do Gemini</label>
     <input name="geminiApiKey" placeholder="AQ...." required />
@@ -162,8 +238,8 @@
 
     <div class="error-msg" id="addError"></div>
     <div class="dialog-actions">
-      <button type="button" class="secondary" id="cancelAdd">Cancelar</button>
-      <button type="submit">Criar e iniciar</button>
+      <button type="button" class="btn btn-secondary" id="cancelAdd">Cancelar</button>
+      <button type="submit" class="btn btn-primary">Criar e iniciar</button>
     </div>
   </form>
 </dialog>
@@ -172,16 +248,16 @@
   <h2 id="logsTitle">Logs</h2>
   <pre id="logsPre"></pre>
   <div class="dialog-actions">
-    <button class="secondary" id="closeLogs">Fechar</button>
+    <button class="btn btn-secondary" id="closeLogs">Fechar</button>
   </div>
 </dialog>
 
 <dialog id="removeDialog">
   <h2 id="removeTitle">Remover pessoa?</h2>
-  <p id="removeBody" style="color: var(--muted); font-size: 14px; line-height: 1.5;"></p>
+  <p class="body-text" id="removeBody"></p>
   <div class="dialog-actions">
-    <button class="secondary" id="cancelRemove">Manter</button>
-    <button class="danger" id="confirmRemove">Remover pessoa</button>
+    <button class="btn btn-secondary" id="cancelRemove">Manter</button>
+    <button class="btn btn-danger-solid" id="confirmRemove">Remover pessoa</button>
   </div>
 </dialog>
 
@@ -218,22 +294,24 @@ function render(instances) {
 
     let extra = '';
     if (inst.running && inst.status?.state === 'qr' && inst.qrUrl) {
-      extra = `<img class="qr" src="${inst.qrUrl}" alt="QR code" />`;
+      extra = `<div class="qr-box"><img src="${inst.qrUrl}" alt="QR code" /></div>`;
     } else if (inst.running && inst.status?.state === 'pairing' && inst.status?.pairingCode) {
       extra = `<div class="pairing-code">${inst.status.pairingCode}</div>`;
     }
 
     card.innerHTML = `
-      <div class="name">${inst.name}</div>
-      <div class="group">${inst.groupName || '💬 conversa com você mesmo'}</div>
-      <span class="badge ${badge.cls}">${badge.text}</span>
+      <div class="card-head">
+        <div class="card-title">${inst.name}</div>
+        <span class="status"><span class="dot ${badge.cls}"></span>${badge.text}</span>
+      </div>
+      <div class="card-meta">${inst.groupName || 'Conversa com você mesmo'}</div>
       ${extra}
-      <div class="row">
+      <div class="card-actions">
         ${inst.running
-          ? '<button class="secondary" data-action="stop">Desconectar</button>'
-          : '<button data-action="start">Conectar</button>'}
-        <button class="secondary" data-action="logs">Ver logs</button>
-        <button class="danger" data-action="remove">Remover</button>
+          ? '<button class="btn btn-secondary" data-action="stop">Desconectar</button>'
+          : '<button class="btn btn-primary" data-action="start">Conectar</button>'}
+        <button class="btn btn-secondary" data-action="logs">Ver logs</button>
+        <button class="btn btn-danger" data-action="remove">Remover</button>
       </div>
     `;
 
