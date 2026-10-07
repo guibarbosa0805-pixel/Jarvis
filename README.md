@@ -13,7 +13,23 @@ Roda como **múltiplas instâncias independentes na mesma máquina**: cada pesso
 - Uma chave de API do Gemini: crie em https://aistudio.google.com/apikey (gratuito, com limites de uso). Pode ser uma só, compartilhada entre todas as instâncias.
 - Node.js instalado na máquina que vai rodar tudo.
 
-## 2. Adicionar uma pessoa (uma instância)
+## 2. Painel de controle (recomendado)
+
+```bash
+npm run panel
+```
+
+Abre um painel web em **http://localhost:4545** (só acessível desta máquina). Nele dá pra:
+
+- **Adicionar pessoa**: formulário com nome, grupo do WhatsApp dela, chave Gemini (já vem preenchida com a mesma chave de quem já existe) e telefone opcional (pra usar código de pareamento em vez de QR).
+- Ver o **QR code ou código de pareamento na tela**, ao vivo, assim que a instância sobe.
+- **Iniciar/Parar** cada instância individualmente, ou todas de uma vez ("Iniciar todas").
+- Ver **logs** de cada uma em tempo real.
+- **Remover** uma instância (mantém a sessão do WhatsApp salva, caso queira recriar com o mesmo nome depois sem reparear).
+
+Deixe esse processo rodando (`npm run panel`) — ele mantém as instâncias vivas enquanto estiver ativo. Se preferir não usar o painel, dá pra fazer tudo manualmente (próxima seção).
+
+## 3. Alternativa: linha de comando
 
 1. A pessoa cria um grupo no WhatsApp dela (com qualquer nome, ex: "Jarvis") e te passa o nome exato do grupo (incluindo emoji, se tiver).
 2. Copie `instances/example.env` para `instances/<nome-da-pessoa>.env` (ex: `instances/maria.env`) e preencha:
@@ -29,19 +45,15 @@ Roda como **múltiplas instâncias independentes na mesma máquina**: cada pesso
 4. Pareie o celular dela — duas formas, sem precisar estar perto da máquina que roda o bot:
    - **QR code** (padrão, se `PHONE_NUMBER` não estiver no `.env` dela): aparece no terminal, e também salvo como imagem em `qr-<nome-da-pessoa>.png`. Ela escaneia em WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho.
    - **Código de pareamento, sem QR** (defina `PHONE_NUMBER=5511999999999` — só dígitos, com DDI — no `.env` dela antes de rodar): o terminal mostra um código tipo `ABCD-1234`. Você manda esse código por texto pra ela (WhatsApp, SMS, o que for), e ela digita em WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho > "Conectar com número de telefone". Mais prático quando ela não está do seu lado.
-5. Depois de conectar, pode parar esse processo (Ctrl+C) e subir todo mundo junto (próximo passo) — a sessão fica salva em `auth/<nome-da-pessoa>/` e não precisa parear de novo (a não ser que a pessoa desconecte o aparelho pelo próprio celular).
-
-## 3. Rodar todo mundo junto
+5. Depois de conectar, pode parar esse processo (Ctrl+C) e subir todo mundo junto — a sessão fica salva em `auth/<nome-da-pessoa>/` e não precisa parear de novo (a não ser que a pessoa desconecte o aparelho pelo próprio celular).
 
 ```bash
 npm run start:all
 ```
 
-Isso sobe um processo para cada instância configurada em `instances/*.env` ao mesmo tempo, cada uma isolada (sessão de WhatsApp, histórico de conversa com o Gemini e `data/<nome>.json` próprios). Os logs de todas aparecem juntos no mesmo terminal, prefixados com `[jarvis:<nome>]`.
+Sobe um processo para cada instância configurada em `instances/*.env` ao mesmo tempo. Os logs de todas aparecem juntos no mesmo terminal, prefixados com `[jarvis:<nome>]`. Pra rodar só uma pessoa: `node src/index.js <nome-da-pessoa>`.
 
-Pra rodar só uma pessoa: `node src/index.js <nome-da-pessoa>` (ou `npm start -- <nome-da-pessoa>`).
-
-Deixe o terminal/PC rodando — o bot só funciona enquanto o processo estiver ativo.
+Em ambos os casos, deixe o processo rodando — o bot só funciona enquanto estiver ativo.
 
 ## 4. Como usar
 
