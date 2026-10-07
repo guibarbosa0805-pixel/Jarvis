@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Painel Jarvis</title>
+<title>Painel do Jarvis</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -95,7 +95,8 @@
   }
   dialog::backdrop { background: rgba(0,0,0,0.6); }
   dialog h2 { margin-top: 0; font-size: 17px; }
-  label { display: block; font-size: 13px; color: var(--muted); margin-top: 12px; margin-bottom: 4px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-top: 14px; margin-bottom: 2px; }
+  .help { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   input {
     width: 100%;
     padding: 8px 10px;
@@ -122,36 +123,41 @@
 </head>
 <body>
 <header>
-  <h1>🤖 Painel Jarvis</h1>
+  <h1>🤖 Painel do Jarvis</h1>
   <div class="actions">
-    <button class="secondary" id="startAllBtn">Iniciar todas</button>
+    <button class="secondary" id="startAllBtn">Conectar todo mundo</button>
     <button id="addBtn">+ Adicionar pessoa</button>
   </div>
 </header>
 <main>
   <div class="grid" id="grid"></div>
-  <p class="empty" id="emptyMsg" style="display:none">Nenhuma instância configurada ainda. Clique em "Adicionar pessoa".</p>
+  <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "+ Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
 </main>
 
 <dialog id="addDialog">
   <h2>Adicionar pessoa</h2>
   <form id="addForm">
-    <label>Nome (identificador, sem espaços)</label>
+    <label>Identificador</label>
+    <small class="help">Sem espaços, só letras/números — ex: maria. É só uso interno, ela não vê isso.</small>
     <input name="name" placeholder="ex: maria" required pattern="[a-zA-Z0-9_-]+" />
 
-    <label>Nome de exibição (como ela quer ser chamada nas mensagens)</label>
+    <label>Nome de exibição</label>
+    <small class="help">Como o Jarvis vai chamá-la nas mensagens.</small>
     <input name="displayName" placeholder="ex: Maria" />
 
-    <label>Nome exato do grupo no WhatsApp dela (opcional — deixe vazio pra usar a conversa "Mensagens para você mesmo", sem precisar criar grupo)</label>
+    <label>Conversa</label>
+    <small class="help">Nome exato do grupo dela no WhatsApp. Vazio = usa "Mensagens para você mesmo", sem precisar criar grupo.</small>
     <input name="groupName" placeholder="ex: Jarvis🧠 (ou deixe vazio)" />
 
-    <label>Telefone (opcional — só dígitos com DDI, ex: 5511999999999). Deixe vazio pra usar QR code.</label>
+    <label>Telefone</label>
+    <small class="help">Opcional, só dígitos com DDI (ex: 5511999999999) — pareia por código em vez de QR. Vazio = QR code.</small>
     <input name="phoneNumber" placeholder="5511999999999" />
 
     <label>Chave de API do Gemini</label>
     <input name="geminiApiKey" placeholder="AQ...." required />
 
-    <label>Horário do resumo matinal (HH:mm, opcional)</label>
+    <label>Resumo matinal</label>
+    <small class="help">Horário (HH:mm) em que o Jarvis manda a agenda do dia. Vazio = não envia.</small>
     <input name="digestTime" placeholder="07:30" value="07:30" />
 
     <div class="error-msg" id="addError"></div>
@@ -170,25 +176,36 @@
   </div>
 </dialog>
 
+<dialog id="removeDialog">
+  <h2 id="removeTitle">Remover pessoa?</h2>
+  <p id="removeBody" style="color: var(--muted); font-size: 14px; line-height: 1.5;"></p>
+  <div class="dialog-actions">
+    <button class="secondary" id="cancelRemove">Manter</button>
+    <button class="danger" id="confirmRemove">Remover pessoa</button>
+  </div>
+</dialog>
+
 <script>
 const grid = document.getElementById('grid');
 const emptyMsg = document.getElementById('emptyMsg');
 const addDialog = document.getElementById('addDialog');
 const logsDialog = document.getElementById('logsDialog');
+const removeDialog = document.getElementById('removeDialog');
 let logsTimer = null;
+let pendingRemoveName = null;
 
 function badgeFor(instance) {
-  if (!instance.running) return { cls: 'off', text: 'Parado' };
+  if (!instance.running) return { cls: 'off', text: 'Desconectado' };
   const s = instance.status?.state;
-  if (s === 'qr') return { cls: 'wait', text: 'Aguardando QR' };
+  if (s === 'qr') return { cls: 'wait', text: 'Aguardando leitura do QR' };
   if (s === 'pairing') return { cls: 'wait', text: 'Aguardando código' };
-  if (s === 'reconnecting') return { cls: 'wait', text: 'Reconectando' };
-  if (s === 'logged_out') return { cls: 'err', text: 'Sessão desconectada' };
+  if (s === 'reconnecting') return { cls: 'wait', text: 'Reconectando...' };
+  if (s === 'logged_out') return { cls: 'err', text: 'Sessão expirada — pareie de novo' };
   if (s === 'connected') {
-    if (instance.status?.groupFound === false) return { cls: 'err', text: 'Conectado, grupo não encontrado' };
+    if (instance.status?.groupFound === false) return { cls: 'err', text: 'Conectado, mas não achei o grupo' };
     return { cls: 'ok', text: 'Conectado' };
   }
-  return { cls: 'wait', text: 'Iniciando...' };
+  return { cls: 'wait', text: 'Conectando...' };
 }
 
 function render(instances) {
@@ -213,9 +230,9 @@ function render(instances) {
       ${extra}
       <div class="row">
         ${inst.running
-          ? '<button class="secondary" data-action="stop">Parar</button>'
-          : '<button data-action="start">Iniciar</button>'}
-        <button class="secondary" data-action="logs">Logs</button>
+          ? '<button class="secondary" data-action="stop">Desconectar</button>'
+          : '<button data-action="start">Conectar</button>'}
+        <button class="secondary" data-action="logs">Ver logs</button>
         <button class="danger" data-action="remove">Remover</button>
       </div>
     `;
@@ -245,14 +262,29 @@ async function stopInstance(name) {
   refresh();
 }
 
-async function removeInstance(name) {
-  if (!confirm(`Remover a instância "${name}"? A sessão de WhatsApp fica guardada (não precisa reparear se recriar com o mesmo nome), mas a configuração é apagada.`)) return;
-  await fetch(`/api/instances/${name}`, { method: 'DELETE' });
-  refresh();
+function removeInstance(name) {
+  pendingRemoveName = name;
+  document.getElementById('removeTitle').textContent = `Remover ${name}?`;
+  document.getElementById('removeBody').textContent =
+    'A sessão de WhatsApp fica guardada — se você recriar com o mesmo nome depois, não precisa parear de novo. Só a configuração (chave, conversa) é apagada.';
+  removeDialog.showModal();
 }
 
+document.getElementById('cancelRemove').addEventListener('click', () => {
+  pendingRemoveName = null;
+  removeDialog.close();
+});
+
+document.getElementById('confirmRemove').addEventListener('click', async () => {
+  const name = pendingRemoveName;
+  removeDialog.close();
+  if (!name) return;
+  await fetch(`/api/instances/${name}`, { method: 'DELETE' });
+  refresh();
+});
+
 async function openLogs(name) {
-  document.getElementById('logsTitle').textContent = `Logs — ${name}`;
+  document.getElementById('logsTitle').textContent = `Logs de ${name}`;
   const pre = document.getElementById('logsPre');
   async function load() {
     const res = await fetch(`/api/instances/${name}/logs`);
@@ -306,7 +338,7 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
   });
   const data = await res.json();
   if (!res.ok) {
-    document.getElementById('addError').textContent = data.error || 'Erro ao criar instância.';
+    document.getElementById('addError').textContent = data.error || 'Erro ao adicionar essa pessoa.';
     return;
   }
   addDialog.close();

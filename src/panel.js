@@ -72,6 +72,8 @@ function startInstance(name) {
   const child = spawn(process.execPath, [`${__dirname}/index.js`, name], {
     cwd: ROOT,
     stdio: ['ignore', fd, fd],
+    detached: true,
+    windowsHide: true,
   });
   closeSync(fd);
   pids[name] = child.pid;
@@ -147,7 +149,7 @@ app.post('/api/instances', (req, res) => {
   }
   if (!geminiApiKey) return res.status(400).json({ error: 'Chave Gemini é obrigatória.' });
   const envPath = `${INSTANCES_DIR}/${name}.env`;
-  if (existsSync(envPath)) return res.status(409).json({ error: 'Já existe uma instância com esse nome.' });
+  if (existsSync(envPath)) return res.status(409).json({ error: 'Já existe uma pessoa com esse identificador.' });
 
   const lines = [`GEMINI_API_KEY=${geminiApiKey}`, `GEMINI_MODEL=${geminiModel || 'gemini-2.5-flash'}`];
   if (displayName) lines.push(`DISPLAY_NAME=${displayName}`);
@@ -160,7 +162,7 @@ app.post('/api/instances', (req, res) => {
 
 app.post('/api/instances/:name/start', (req, res) => {
   const { name } = req.params;
-  if (!existsSync(`${INSTANCES_DIR}/${name}.env`)) return res.status(404).json({ error: 'Instância não encontrada.' });
+  if (!existsSync(`${INSTANCES_DIR}/${name}.env`)) return res.status(404).json({ error: 'Essa pessoa não foi encontrada.' });
   res.json(startInstance(name));
 });
 
