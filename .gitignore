@@ -5,3 +5,5 @@ instances/*.env
 !instances/example.env
 run.log
 qr-*.png
+status/
+logs/

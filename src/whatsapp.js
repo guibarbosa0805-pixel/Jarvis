@@ -6,6 +6,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeStatus } from './status.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const INSTANCE = process.env.INSTANCE_NAME || 'default';
@@ -40,12 +41,14 @@ export async function startWhatsApp() {
           jarvisJid = match.id;
           console.log(`${TAG} Grupo "${GROUP_NAME}" encontrado, escutando mensagens.`);
         }
+        writeStatus(INSTANCE, { groupFound: true, groupName: GROUP_NAME });
       } else if (list.length > 0) {
         console.warn(
           `${TAG} Nenhum grupo chamado "${GROUP_NAME}" entre os ${list.length} grupos encontrados: ${list
             .map((g) => JSON.stringify(g.subject))
             .join(', ')}`,
         );
+        writeStatus(INSTANCE, { groupFound: false, groupName: GROUP_NAME, groupsSeen: list.length });
       } else {
         console.warn(`${TAG} Ainda não vejo nenhum grupo (sincronizando com o WhatsApp)...`);
       }
@@ -76,6 +79,7 @@ export async function startWhatsApp() {
         console.log(
           `${TAG} No celular: WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho > "Conectar com número de telefone" e digite esse código.\n`,
         );
+        writeStatus(INSTANCE, { state: 'pairing', pairingCode: pretty });
       } catch (err) {
         console.error(`${TAG} Erro ao gerar código de pareamento:`, err.message);
       }
@@ -89,10 +93,12 @@ export async function startWhatsApp() {
         QRCode.toFile(QR_PNG_PATH, qr, { width: 640, margin: 3 }).catch((err) =>
           console.error(`${TAG} Erro ao gerar ${QR_PNG_PATH}:`, err.message),
         );
+        writeStatus(INSTANCE, { state: 'qr' });
       }
       if (connection === 'open') {
         console.log(`${TAG} Conectado ao WhatsApp.`);
         if (existsSync(QR_PNG_PATH)) unlinkSync(QR_PNG_PATH);
+        writeStatus(INSTANCE, { state: 'connected', pairingCode: null });
         resolveJarvisJid();
         setTimeout(resolveJarvisJid, 5000);
         setTimeout(resolveJarvisJid, 15000);
@@ -104,8 +110,10 @@ export async function startWhatsApp() {
           console.error(
             `${TAG} Sessão desconectada pelo celular. Apague a pasta "auth/${INSTANCE}" e rode novamente para parear de novo (QR ou código, conforme PHONE_NUMBER).`,
           );
+          writeStatus(INSTANCE, { state: 'logged_out' });
         } else {
           console.log(`${TAG} Conexão perdida (code ${statusCode}), reconectando...`);
+          writeStatus(INSTANCE, { state: 'reconnecting' });
           connect();
         }
       }

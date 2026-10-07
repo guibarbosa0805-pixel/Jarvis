@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Painel Jarvis</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #171a21;
+    --border: #262b36;
+    --text: #e6e8eb;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --green: #35c56a;
+    --yellow: #e2b93b;
+    --red: #e25555;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 20px; margin: 0; }
+  header .actions { display: flex; gap: 10px; }
+  main { padding: 24px 28px; max-width: 1000px; margin: 0 auto; }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.secondary { background: #2a2f3a; }
+  button.danger { background: var(--red); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card .name { font-size: 16px; font-weight: 600; }
+  .card .group { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .badge {
+    display: inline-block;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-top: 8px;
+  }
+  .badge.off { background: #2a2f3a; color: var(--muted); }
+  .badge.wait { background: #3a331a; color: var(--yellow); }
+  .badge.ok { background: #16321f; color: var(--green); }
+  .badge.err { background: #3a1a1a; color: var(--red); }
+  .card .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .card img.qr { width: 100%; max-width: 220px; margin-top: 12px; border-radius: 6px; }
+  .pairing-code {
+    margin-top: 12px;
+    font-size: 22px;
+    letter-spacing: 2px;
+    font-weight: 700;
+    color: var(--yellow);
+    background: #2a2416;
+    padding: 8px 10px;
+    border-radius: 6px;
+    text-align: center;
+  }
+  .empty { color: var(--muted); margin-top: 24px; }
+  dialog {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    width: 420px;
+    max-width: 90vw;
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.6); }
+  dialog h2 { margin-top: 0; font-size: 17px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-top: 12px; margin-bottom: 4px; }
+  input {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0f1115;
+    color: var(--text);
+    font-size: 14px;
+  }
+  dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .error-msg { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 16px; }
+  #logsPre {
+    background: #0b0d11;
+    padding: 12px;
+    border-radius: 6px;
+    max-height: 50vh;
+    overflow: auto;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #logsDialog { width: 640px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 Painel Jarvis</h1>
+  <div class="actions">
+    <button class="secondary" id="startAllBtn">Iniciar todas</button>
+    <button id="addBtn">+ Adicionar pessoa</button>
+  </div>
+</header>
+<main>
+  <div class="grid" id="grid"></div>
+  <p class="empty" id="emptyMsg" style="display:none">Nenhuma instância configurada ainda. Clique em "Adicionar pessoa".</p>
+</main>
+
+<dialog id="addDialog">
+  <h2>Adicionar pessoa</h2>
+  <form id="addForm">
+    <label>Nome (identificador, sem espaços)</label>
+    <input name="name" placeholder="ex: maria" required pattern="[a-zA-Z0-9_-]+" />
+
+    <label>Nome exato do grupo no WhatsApp dela</label>
+    <input name="groupName" placeholder="ex: Jarvis🧠" required />
+
+    <label>Telefone (opcional — só dígitos com DDI, ex: 5511999999999). Deixe vazio pra usar QR code.</label>
+    <input name="phoneNumber" placeholder="5511999999999" />
+
+    <label>Chave de API do Gemini</label>
+    <input name="geminiApiKey" placeholder="AQ...." required />
+
+    <div class="error-msg" id="addError"></div>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" id="cancelAdd">Cancelar</button>
+      <button type="submit">Criar e iniciar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="logsDialog">
+  <h2 id="logsTitle">Logs</h2>
+  <pre id="logsPre"></pre>
+  <div class="dialog-actions">
+    <button class="secondary" id="closeLogs">Fechar</button>
+  </div>
+</dialog>
+
+<script>
+const grid = document.getElementById('grid');
+const emptyMsg = document.getElementById('emptyMsg');
+const addDialog = document.getElementById('addDialog');
+const logsDialog = document.getElementById('logsDialog');
+let logsTimer = null;
+
+function badgeFor(instance) {
+  if (!instance.running) return { cls: 'off', text: 'Parado' };
+  const s = instance.status?.state;
+  if (s === 'qr') return { cls: 'wait', text: 'Aguardando QR' };
+  if (s === 'pairing') return { cls: 'wait', text: 'Aguardando código' };
+  if (s === 'reconnecting') return { cls: 'wait', text: 'Reconectando' };
+  if (s === 'logged_out') return { cls: 'err', text: 'Sessão desconectada' };
+  if (s === 'connected') {
+    if (instance.status?.groupFound === false) return { cls: 'err', text: 'Conectado, grupo não encontrado' };
+    return { cls: 'ok', text: 'Conectado' };
+  }
+  return { cls: 'wait', text: 'Iniciando...' };
+}
+
+function render(instances) {
+  grid.innerHTML = '';
+  emptyMsg.style.display = instances.length === 0 ? 'block' : 'none';
+  for (const inst of instances) {
+    const badge = badgeFor(inst);
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    let extra = '';
+    if (inst.running && inst.status?.state === 'qr' && inst.qrUrl) {
+      extra = `<img class="qr" src="${inst.qrUrl}" alt="QR code" />`;
+    } else if (inst.running && inst.status?.state === 'pairing' && inst.status?.pairingCode) {
+      extra = `<div class="pairing-code">${inst.status.pairingCode}</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="name">${inst.name}</div>
+      <div class="group">${inst.groupName || '(sem grupo configurado)'}</div>
+      <span class="badge ${badge.cls}">${badge.text}</span>
+      ${extra}
+      <div class="row">
+        ${inst.running
+          ? '<button class="secondary" data-action="stop">Parar</button>'
+          : '<button data-action="start">Iniciar</button>'}
+        <button class="secondary" data-action="logs">Logs</button>
+        <button class="danger" data-action="remove">Remover</button>
+      </div>
+    `;
+
+    card.querySelector('[data-action="start"]')?.addEventListener('click', () => startInstance(inst.name));
+    card.querySelector('[data-action="stop"]')?.addEventListener('click', () => stopInstance(inst.name));
+    card.querySelector('[data-action="logs"]')?.addEventListener('click', () => openLogs(inst.name));
+    card.querySelector('[data-action="remove"]')?.addEventListener('click', () => removeInstance(inst.name));
+
+    grid.appendChild(card);
+  }
+}
+
+async function refresh() {
+  const res = await fetch('/api/instances');
+  const instances = await res.json();
+  render(instances);
+}
+
+async function startInstance(name) {
+  await fetch(`/api/instances/${name}/start`, { method: 'POST' });
+  refresh();
+}
+
+async function stopInstance(name) {
+  await fetch(`/api/instances/${name}/stop`, { method: 'POST' });
+  refresh();
+}
+
+async function removeInstance(name) {
+  if (!confirm(`Remover a instância "${name}"? A sessão de WhatsApp fica guardada (não precisa reparear se recriar com o mesmo nome), mas a configuração é apagada.`)) return;
+  await fetch(`/api/instances/${name}`, { method: 'DELETE' });
+  refresh();
+}
+
+async function openLogs(name) {
+  document.getElementById('logsTitle').textContent = `Logs — ${name}`;
+  const pre = document.getElementById('logsPre');
+  async function load() {
+    const res = await fetch(`/api/instances/${name}/logs`);
+    const data = await res.json();
+    pre.textContent = data.lines.join('\n');
+    pre.scrollTop = pre.scrollHeight;
+  }
+  await load();
+  logsDialog.showModal();
+  logsTimer = setInterval(load, 2000);
+}
+
+document.getElementById('closeLogs').addEventListener('click', () => {
+  logsDialog.close();
+  if (logsTimer) clearInterval(logsTimer);
+});
+
+document.getElementById('startAllBtn').addEventListener('click', async () => {
+  await fetch('/api/start-all', { method: 'POST' });
+  refresh();
+});
+
+document.getElementById('addBtn').addEventListener('click', async () => {
+  document.getElementById('addError').textContent = '';
+  document.getElementById('addForm').reset();
+  try {
+    const res = await fetch('/api/default-gemini-key');
+    const data = await res.json();
+    if (data.key) document.querySelector('[name="geminiApiKey"]').value = data.key;
+  } catch {}
+  addDialog.showModal();
+});
+
+document.getElementById('cancelAdd').addEventListener('click', () => addDialog.close());
+
+document.getElementById('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const payload = {
+    name: form.name.value.trim(),
+    groupName: form.groupName.value.trim(),
+    phoneNumber: form.phoneNumber.value.trim(),
+    geminiApiKey: form.geminiApiKey.value.trim(),
+  };
+  const res = await fetch('/api/instances', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    document.getElementById('addError').textContent = data.error || 'Erro ao criar instância.';
+    return;
+  }
+  addDialog.close();
+  await startInstance(payload.name);
+});
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
