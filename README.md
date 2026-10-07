@@ -23,7 +23,9 @@ Assistente pessoal que conecta no seu WhatsApp (via WhatsApp Web, biblioteca nã
 npm start
 ```
 
-Na primeira vez vai aparecer um **QR code no terminal**. No celular: WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho, e escaneie. Depois disso a sessão fica salva na pasta `auth/` e não precisa escanear de novo (a não ser que desconecte o aparelho pelo celular).
+Na primeira vez vai aparecer um **QR code no terminal**. No celular: WhatsApp > Configurações > Aparelhos conectados > Conectar um aparelho, e escaneie. Se o QR ficar ilegível no terminal (fonte pequena, cores), o programa também salva um arquivo `qr.png` na pasta do projeto — abra esse arquivo e escaneie nele.
+
+Depois de conectar, a sessão fica salva na pasta `auth/` e não precisa escanear de novo (a não ser que desconecte o aparelho pelo celular).
 
 Deixe o terminal/PC rodando — o bot só funciona enquanto o processo `npm start` estiver ativo.
 
