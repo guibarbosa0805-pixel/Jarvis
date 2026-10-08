@@ -205,12 +205,12 @@
 </main>
 
 <dialog id="addDialog">
-  <h2>Adicionar pessoa</h2>
+  <h2 id="addDialogTitle">Adicionar pessoa</h2>
   <form id="addForm">
     <div class="section-label">Identificação</div>
 
     <label>Identificador</label>
-    <small class="help">Sem espaços, só letras/números — ex: maria. É só uso interno, ela não vê isso.</small>
+    <small class="help" id="nameHelp">Sem espaços, só letras/números — ex: maria. É só uso interno, ela não vê isso.</small>
     <input name="name" placeholder="ex: maria" required pattern="[a-zA-Z0-9_-]+" />
 
     <label>Nome de exibição</label>
@@ -239,9 +239,18 @@
     <div class="error-msg" id="addError"></div>
     <div class="dialog-actions">
       <button type="button" class="btn btn-secondary" id="cancelAdd">Cancelar</button>
-      <button type="submit" class="btn btn-primary">Criar e iniciar</button>
+      <button type="submit" class="btn btn-primary" id="addSubmitBtn">Criar e iniciar</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="repairDialog">
+  <h2 id="repairTitle">Reparear pessoa?</h2>
+  <p class="body-text" id="repairBody"></p>
+  <div class="dialog-actions">
+    <button class="btn btn-secondary" id="cancelRepair">Cancelar</button>
+    <button class="btn btn-primary" id="confirmRepair">Reparear</button>
+  </div>
 </dialog>
 
 <dialog id="logsDialog">
@@ -277,6 +286,7 @@ function badgeFor(instance) {
   if (s === 'pairing') return { cls: 'wait', text: 'Aguardando código' };
   if (s === 'reconnecting') return { cls: 'wait', text: 'Reconectando...' };
   if (s === 'logged_out') return { cls: 'err', text: 'Sessão expirada — pareie de novo' };
+  if (s === 'error') return { cls: 'err', text: 'Falha ao conectar — tente reparear' };
   if (s === 'connected') {
     if (instance.status?.groupFound === false) return { cls: 'err', text: 'Conectado, mas não achei o grupo' };
     return { cls: 'ok', text: 'Conectado' };
@@ -310,14 +320,18 @@ function render(instances) {
         ${inst.running
           ? '<button class="btn btn-secondary" data-action="stop">Desconectar</button>'
           : '<button class="btn btn-primary" data-action="start">Conectar</button>'}
+        <button class="btn btn-secondary" data-action="edit">Editar</button>
         <button class="btn btn-secondary" data-action="logs">Ver logs</button>
+        <button class="btn btn-secondary" data-action="repair">Reparear</button>
         <button class="btn btn-danger" data-action="remove">Remover</button>
       </div>
     `;
 
     card.querySelector('[data-action="start"]')?.addEventListener('click', () => startInstance(inst.name));
     card.querySelector('[data-action="stop"]')?.addEventListener('click', () => stopInstance(inst.name));
+    card.querySelector('[data-action="edit"]')?.addEventListener('click', () => openEdit(inst.name));
     card.querySelector('[data-action="logs"]')?.addEventListener('click', () => openLogs(inst.name));
+    card.querySelector('[data-action="repair"]')?.addEventListener('click', () => repairInstance(inst.name));
     card.querySelector('[data-action="remove"]')?.addEventListener('click', () => removeInstance(inst.name));
 
     grid.appendChild(card);
@@ -385,9 +399,17 @@ document.getElementById('startAllBtn').addEventListener('click', async () => {
   refresh();
 });
 
+let editingName = null;
+const nameInput = document.querySelector('#addForm [name="name"]');
+
 document.getElementById('addBtn').addEventListener('click', async () => {
+  editingName = null;
+  document.getElementById('addDialogTitle').textContent = 'Adicionar pessoa';
+  document.getElementById('addSubmitBtn').textContent = 'Criar e iniciar';
+  document.getElementById('nameHelp').textContent = 'Sem espaços, só letras/números — ex: maria. É só uso interno, ela não vê isso.';
   document.getElementById('addError').textContent = '';
   document.getElementById('addForm').reset();
+  nameInput.disabled = false;
   try {
     const res = await fetch('/api/default-gemini-key');
     const data = await res.json();
@@ -395,6 +417,28 @@ document.getElementById('addBtn').addEventListener('click', async () => {
   } catch {}
   addDialog.showModal();
 });
+
+async function openEdit(name) {
+  editingName = name;
+  document.getElementById('addDialogTitle').textContent = `Editar ${name}`;
+  document.getElementById('addSubmitBtn').textContent = 'Salvar alterações';
+  document.getElementById('nameHelp').textContent = 'Não dá pra trocar o identificador por aqui — remova e crie de novo se precisar.';
+  document.getElementById('addError').textContent = '';
+  document.getElementById('addForm').reset();
+
+  const res = await fetch(`/api/instances/${name}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  const form = document.getElementById('addForm');
+  form.name.value = data.name;
+  form.displayName.value = data.displayName;
+  form.groupName.value = data.groupName;
+  form.phoneNumber.value = data.phoneNumber;
+  form.geminiApiKey.value = data.geminiApiKey;
+  form.digestTime.value = data.digestTime;
+  nameInput.disabled = true;
+  addDialog.showModal();
+}
 
 document.getElementById('cancelAdd').addEventListener('click', () => addDialog.close());
 
@@ -409,19 +453,40 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
     geminiApiKey: form.geminiApiKey.value.trim(),
     digestTime: form.digestTime.value.trim(),
   };
-  const res = await fetch('/api/instances', {
-    method: 'POST',
+  const url = editingName ? `/api/instances/${editingName}` : '/api/instances';
+  const res = await fetch(url, {
+    method: editingName ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
   const data = await res.json();
   if (!res.ok) {
-    document.getElementById('addError').textContent = data.error || 'Erro ao adicionar essa pessoa.';
+    document.getElementById('addError').textContent = data.error || 'Erro ao salvar.';
     return;
   }
   addDialog.close();
-  await startInstance(payload.name);
+  nameInput.disabled = false;
+  if (!editingName) await startInstance(payload.name);
+  else refresh();
 });
+
+function repairInstance(name) {
+  document.getElementById('repairTitle').textContent = `Reparear ${name}?`;
+  document.getElementById('repairBody').textContent =
+    'Isso desconecta a sessão atual do WhatsApp e gera um QR/código novo pra escanear — use quando a sessão expirar ou parar de responder. As tarefas e o histórico continuam guardados.';
+  const confirmBtn = document.getElementById('confirmRepair');
+  const handler = async () => {
+    repairDialog.close();
+    confirmBtn.removeEventListener('click', handler);
+    await fetch(`/api/instances/${name}/repair`, { method: 'POST' });
+    refresh();
+  };
+  confirmBtn.addEventListener('click', handler);
+  repairDialog.showModal();
+}
+
+const repairDialog = document.getElementById('repairDialog');
+document.getElementById('cancelRepair').addEventListener('click', () => repairDialog.close());
 
 refresh();
 setInterval(refresh, 3000);

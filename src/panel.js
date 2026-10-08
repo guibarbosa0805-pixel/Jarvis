@@ -1,6 +1,16 @@
 import express from 'express';
 import { spawn } from 'node:child_process';
-import { readdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync, closeSync } from 'node:fs';
+import {
+  readdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  rmSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStatus } from './status.js';
@@ -142,22 +152,65 @@ app.get('/api/instances/:name/logs', (req, res) => {
   res.json({ lines });
 });
 
+function envFileContent({ groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber }) {
+  const lines = [`GEMINI_API_KEY=${geminiApiKey}`, `GEMINI_MODEL=${geminiModel || 'gemini-2.5-flash'}`];
+  if (displayName) lines.push(`DISPLAY_NAME=${displayName}`);
+  if (groupName) lines.push(`GROUP_NAME=${groupName}`);
+  lines.push(`DIGEST_TIME=${digestTime || '07:30'}`);
+  if (phoneNumber) lines.push(`PHONE_NUMBER=${String(phoneNumber).replace(/\D/g, '')}`);
+  return lines.join('\n') + '\n';
+}
+
 app.post('/api/instances', (req, res) => {
   const { name, groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber } = req.body || {};
   if (!name || !/^[a-z0-9_-]+$/i.test(name)) {
     return res.status(400).json({ error: 'Nome inválido. Use só letras, números, - e _.' });
   }
   if (!geminiApiKey) return res.status(400).json({ error: 'Chave Gemini é obrigatória.' });
-  const envPath = `${INSTANCES_DIR}/${name}.env`;
-  if (existsSync(envPath)) return res.status(409).json({ error: 'Já existe uma pessoa com esse identificador.' });
+  // Normaliza pra minúsculo: Windows não distingue maiúscula/minúscula em nomes de
+  // pasta, então "Maria" e "maria" acabariam colidindo na mesma sessão do WhatsApp.
+  const id = name.toLowerCase();
+  const collision = listInstanceNames().some((existing) => existing.toLowerCase() === id);
+  if (collision) return res.status(409).json({ error: 'Já existe uma pessoa com esse identificador.' });
 
-  const lines = [`GEMINI_API_KEY=${geminiApiKey}`, `GEMINI_MODEL=${geminiModel || 'gemini-2.5-flash'}`];
-  if (displayName) lines.push(`DISPLAY_NAME=${displayName}`);
-  if (groupName) lines.push(`GROUP_NAME=${groupName}`);
-  lines.push(`DIGEST_TIME=${digestTime || '07:30'}`);
-  if (phoneNumber) lines.push(`PHONE_NUMBER=${String(phoneNumber).replace(/\D/g, '')}`);
-  writeFileSync(envPath, lines.join('\n') + '\n', 'utf8');
-  res.json({ ok: true });
+  const envPath = `${INSTANCES_DIR}/${id}.env`;
+  writeFileSync(envPath, envFileContent({ groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber }), 'utf8');
+  res.json({ ok: true, name: id });
+});
+
+app.get('/api/instances/:name', (req, res) => {
+  const { name } = req.params;
+  const envPath = `${INSTANCES_DIR}/${name}.env`;
+  if (!existsSync(envPath)) return res.status(404).json({ error: 'Essa pessoa não foi encontrada.' });
+  const env = parseEnvFile(envPath);
+  res.json({
+    name,
+    displayName: env.DISPLAY_NAME || '',
+    groupName: env.GROUP_NAME || '',
+    phoneNumber: env.PHONE_NUMBER || '',
+    geminiApiKey: env.GEMINI_API_KEY || '',
+    geminiModel: env.GEMINI_MODEL || '',
+    digestTime: env.DIGEST_TIME || '',
+  });
+});
+
+app.put('/api/instances/:name', async (req, res) => {
+  const { name } = req.params;
+  const envPath = `${INSTANCES_DIR}/${name}.env`;
+  if (!existsSync(envPath)) return res.status(404).json({ error: 'Essa pessoa não foi encontrada.' });
+  const { groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber } = req.body || {};
+  if (!geminiApiKey) return res.status(400).json({ error: 'Chave Gemini é obrigatória.' });
+
+  writeFileSync(envPath, envFileContent({ groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber }), 'utf8');
+
+  const wasRunning = !!pids[name] && isAlive(pids[name]);
+  if (wasRunning) {
+    stopInstance(name);
+    // Dá um tempo pro processo antigo soltar os arquivos de sessão antes de reabrir.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    startInstance(name);
+  }
+  res.json({ ok: true, restarted: wasRunning });
 });
 
 app.post('/api/instances/:name/start', (req, res) => {
@@ -172,6 +225,23 @@ app.post('/api/instances/:name/stop', (req, res) => {
 
 app.post('/api/start-all', (req, res) => {
   res.json(listInstanceNames().map((name) => ({ name, ...startInstance(name) })));
+});
+
+app.post('/api/instances/:name/repair', async (req, res) => {
+  const { name } = req.params;
+  const envPath = `${INSTANCES_DIR}/${name}.env`;
+  if (!existsSync(envPath)) return res.status(404).json({ error: 'Essa pessoa não foi encontrada.' });
+
+  const wasRunning = !!pids[name] && isAlive(pids[name]);
+  stopInstance(name);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  rmSync(`${ROOT}/auth/${name}`, { recursive: true, force: true });
+  rmSync(`${ROOT}/qr-${name}.png`, { force: true });
+  rmSync(`${STATUS_DIR}/${name}.json`, { force: true });
+
+  startInstance(name);
+  res.json({ ok: true, wasRunning });
 });
 
 app.delete('/api/instances/:name', (req, res) => {

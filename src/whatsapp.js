@@ -30,6 +30,8 @@ export async function startWhatsApp() {
 
   let sock;
   let jarvisJid = null;
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 6;
 
   async function resolveJarvisJid() {
     if (!GROUP_NAME) {
@@ -87,6 +89,16 @@ export async function startWhatsApp() {
 
     if (PHONE_NUMBER && !state.creds.registered) {
       try {
+        if (!sock.ws.isOpen) {
+          await Promise.race([
+            new Promise((resolve) => sock.ws.once('open', resolve)),
+            new Promise((resolve) => setTimeout(resolve, 10000)),
+          ]);
+        }
+        // O WebSocket abrir não significa que o handshake criptografado (Noise)
+        // já terminou — pedir o código cedo demais faz o servidor derrubar a
+        // conexão na hora. Essa folga extra dá tempo do handshake terminar.
+        await new Promise((resolve) => setTimeout(resolve, 2500));
         const rawCode = await sock.requestPairingCode(PHONE_NUMBER);
         const pretty = rawCode.match(/.{1,4}/g)?.join('-') ?? rawCode;
         console.log(`\n${TAG} Código de pareamento (sem QR): ${pretty}`);
@@ -111,6 +123,7 @@ export async function startWhatsApp() {
       }
       if (connection === 'open') {
         console.log(`${TAG} Conectado ao WhatsApp.`);
+        consecutiveFailures = 0;
         if (existsSync(QR_PNG_PATH)) unlinkSync(QR_PNG_PATH);
         writeStatus(INSTANCE, { state: 'connected', pairingCode: null });
         resolveJarvisJid();
@@ -125,11 +138,20 @@ export async function startWhatsApp() {
             `${TAG} Sessão desconectada pelo celular. Apague a pasta "auth/${INSTANCE}" e rode novamente para parear de novo (QR ou código, conforme PHONE_NUMBER).`,
           );
           writeStatus(INSTANCE, { state: 'logged_out' });
-        } else {
-          console.log(`${TAG} Conexão perdida (code ${statusCode}), reconectando...`);
-          writeStatus(INSTANCE, { state: 'reconnecting' });
-          connect();
+          return;
         }
+        consecutiveFailures++;
+        if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) {
+          console.error(
+            `${TAG} ${consecutiveFailures} falhas de conexão seguidas (code ${statusCode}). Parando de tentar pra não martelar o WhatsApp — rode de novo manualmente mais tarde.`,
+          );
+          writeStatus(INSTANCE, { state: 'error', error: `${consecutiveFailures} falhas seguidas (code ${statusCode})` });
+          return;
+        }
+        const backoffMs = Math.min(consecutiveFailures * 3000, 30000);
+        console.log(`${TAG} Conexão perdida (code ${statusCode}), tentando de novo em ${backoffMs / 1000}s...`);
+        writeStatus(INSTANCE, { state: 'reconnecting' });
+        setTimeout(connect, backoffMs);
       }
     });
 

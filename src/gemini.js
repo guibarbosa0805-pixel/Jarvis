@@ -1,12 +1,6 @@
 import { GoogleGenAI, Type, createPartFromFunctionResponse } from '@google/genai';
-import { addTask, listPending, completeTask, deleteTask } from './store.js';
+import * as defaultStore from './store.js';
 import { formatDateShort, formatTime } from './format.js';
-
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const DISPLAY_NAME =
-  process.env.DISPLAY_NAME || (process.env.INSTANCE_NAME || 'você').replace(/^./, (c) => c.toUpperCase());
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const tools = [
   {
@@ -14,7 +8,7 @@ const tools = [
       {
         name: 'create_reminder',
         description:
-          'Cria uma tarefa/lembrete com data e hora para avisar no WhatsApp no momento certo (e um pouco antes). Use sempre que mencionarem algo com prazo, horário ou compromisso (tarefa, reunião, ligação, evento, etc).',
+          'Cria uma tarefa/lembrete com data e hora para avisar no momento certo (e um pouco antes). Use sempre que mencionarem algo com prazo, horário ou compromisso (tarefa, reunião, ligação, evento, etc).',
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -62,7 +56,38 @@ const tools = [
   },
 ];
 
-function runFunction(name, args) {
+function buildSystemInstruction(displayName, channelLabel) {
+  return `Você é o Jarvis, secretário(a) pessoal particular de ${displayName}. Vocês conversam ${channelLabel}, só vocês dois, pra organizar a vida dele(a).
+
+Seu papel:
+- Ajudar a organizar tarefas, demandas e compromissos.
+- Agendar lembretes usando create_reminder sempre que ${displayName} mencionar algo com prazo, horário ou compromisso (ex: "me lembra de X às 15h", "reunião com o cliente quinta às 10h", "masterclass hoje às 19:30 <link>"). Se faltar data ou hora, pergunte antes de chamar a função — não invente horário.
+- Se a mensagem tiver uma URL (link de reunião, evento, inscrição), sempre passe no campo "link" da função.
+- Não precisa perguntar quanto tempo de antecedência avisar — use o padrão (30 min) a não ser que a pessoa peça outro.
+- Quando perguntarem o que está pendente, use list_pending_tasks e responda de forma organizada e curta.
+- Quando disserem que terminaram/concluíram algo, use complete_task (chame list_pending_tasks antes se não souber o ID).
+- Quando quiserem cancelar algo, use delete_task.
+- Quando pedirem ideias, sugestões, brainstorm ou ajuda pra pensar em algo, responda direto com ideias práticas e específicas — não precisa usar nenhuma função pra isso.
+
+Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
+
+✅ Agendado, ${displayName}!
+
+📅 <título>
+📆 <formatted.date_short> às <formatted.time>
+⏰ Lembrete: <formatted.lead_time>
+🔗 Link: <link, só inclua esta linha se houver link>
+
+<uma frase curta e simpática de fechamento, variando a cada vez — ex: oferecer mostrar o resto da agenda do dia ou do dia seguinte, ou só um "beleza!" descontraído>
+
+Estilo geral:
+- Português do Brasil, caloroso mas direto — é um(a) secretário(a) de confiança, não um robô formal.
+- Pode chamar ${displayName} pelo nome de vez em quando, principalmente em saudações e confirmações.
+- Mensagens curtas. Emojis com moderação fora do template de confirmação (✅ ⏰ 💡 📅 🔗).
+- Toda mensagem recebida vem precedida de "[Data/hora atual: ...]" entre colchetes — use só como referência pra calcular "hoje", "amanhã", "sexta que vem" etc, nunca repita esse trecho na resposta.`;
+}
+
+function runFunction(store, name, args) {
   switch (name) {
     case 'create_reminder': {
       const dueAt = new Date(`${args.date}T${args.time}:00`);
@@ -70,7 +95,7 @@ function runFunction(name, args) {
         return { ok: false, error: 'Data/hora inválida. Use date=YYYY-MM-DD e time=HH:mm.' };
       }
       const leadMinutes = Number.isFinite(args.lead_minutes) ? args.lead_minutes : undefined;
-      const task = addTask({
+      const task = store.addTask({
         title: args.title,
         notes: args.notes,
         dueAt: dueAt.toISOString(),
@@ -89,66 +114,67 @@ function runFunction(name, args) {
       };
     }
     case 'list_pending_tasks':
-      return { ok: true, tasks: listPending() };
+      return { ok: true, tasks: store.listPending() };
     case 'complete_task': {
-      const task = completeTask(args.id);
+      const task = store.completeTask(args.id);
       return task ? { ok: true, task } : { ok: false, error: 'Tarefa não encontrada.' };
     }
     case 'delete_task':
-      return { ok: deleteTask(args.id) };
+      return { ok: store.deleteTask(args.id) };
     default:
       return { ok: false, error: `Função desconhecida: ${name}` };
   }
 }
 
-const SYSTEM_INSTRUCTION = `Você é o Jarvis, secretário(a) pessoal particular de ${DISPLAY_NAME}. Vocês conversam no WhatsApp, só vocês dois, pra organizar a vida dele(a).
+/**
+ * Cria uma sessão de conversa independente com o Jarvis: próprio histórico,
+ * própria chave/modelo Gemini e próprio store de tarefas.
+ */
+export function createBrain({ apiKey, model, displayName, store, channelLabel = 'no WhatsApp' }) {
+  const ai = new GoogleGenAI({ apiKey });
+  const chat = ai.chats.create({
+    model: model || 'gemini-2.5-flash',
+    config: { systemInstruction: buildSystemInstruction(displayName, channelLabel), tools },
+  });
 
-Seu papel:
-- Ajudar a organizar tarefas, demandas e compromissos.
-- Agendar lembretes usando create_reminder sempre que ${DISPLAY_NAME} mencionar algo com prazo, horário ou compromisso (ex: "me lembra de X às 15h", "reunião com o cliente quinta às 10h", "masterclass hoje às 19:30 <link>"). Se faltar data ou hora, pergunte antes de chamar a função — não invente horário.
-- Se a mensagem tiver uma URL (link de reunião, evento, inscrição), sempre passe no campo "link" da função.
-- Não precisa perguntar quanto tempo de antecedência avisar — use o padrão (30 min) a não ser que a pessoa peça outro.
-- Quando perguntarem o que está pendente, use list_pending_tasks e responda de forma organizada e curta.
-- Quando disserem que terminaram/concluíram algo, use complete_task (chame list_pending_tasks antes se não souber o ID).
-- Quando quiserem cancelar algo, use delete_task.
-- Quando pedirem ideias, sugestões, brainstorm ou ajuda pra pensar em algo, responda direto com ideias práticas e específicas — não precisa usar nenhuma função pra isso.
+  return {
+    async handleIncomingMessage(text) {
+      const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
+      const augmented = `[Data/hora atual: ${now}]\n${text}`;
 
-Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
+      let response = await chat.sendMessage({ message: augmented });
 
-✅ Agendado, ${DISPLAY_NAME}!
+      let guard = 0;
+      while (response.functionCalls?.length && guard < 5) {
+        guard++;
+        const responseParts = response.functionCalls.map((call) =>
+          createPartFromFunctionResponse(call.id ?? call.name, call.name, runFunction(store, call.name, call.args || {})),
+        );
+        response = await chat.sendMessage({ message: responseParts });
+      }
 
-📅 <título>
-📆 <formatted.date_short> às <formatted.time>
-⏰ Lembrete: <formatted.lead_time>
-🔗 Link: <link, só inclua esta linha se houver link>
+      return response.text?.trim() || 'Ok.';
+    },
+  };
+}
 
-<uma frase curta e simpática de fechamento, variando a cada vez — ex: oferecer mostrar o resto da agenda do dia ou do dia seguinte, ou só um "beleza!" descontraído>
-
-Estilo geral:
-- Português do Brasil, caloroso mas direto — é um(a) secretário(a) de confiança, não um robô formal.
-- Pode chamar ${DISPLAY_NAME} pelo nome de vez em quando, principalmente em saudações e confirmações.
-- Mensagens curtas, isso é WhatsApp. Emojis com moderação fora do template de confirmação (✅ ⏰ 💡 📅 🔗).
-- Toda mensagem recebida vem precedida de "[Data/hora atual: ...]" entre colchetes — use só como referência pra calcular "hoje", "amanhã", "sexta que vem" etc, nunca repita esse trecho na resposta.`;
-
-const chat = ai.chats.create({
-  model: MODEL,
-  config: { systemInstruction: SYSTEM_INSTRUCTION, tools },
-});
-
-export async function handleIncomingMessage(text) {
-  const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
-  const augmented = `[Data/hora atual: ${now}]\n${text}`;
-
-  let response = await chat.sendMessage({ message: augmented });
-
-  let guard = 0;
-  while (response.functionCalls?.length && guard < 5) {
-    guard++;
-    const responseParts = response.functionCalls.map((call) =>
-      createPartFromFunctionResponse(call.id ?? call.name, call.name, runFunction(call.name, call.args || {})),
-    );
-    response = await chat.sendMessage({ message: responseParts });
+// Sessão padrão do processo atual, usada pelo bot do WhatsApp (lê config do process.env).
+// Criada sob demanda pra não instanciar o cliente Gemini quando este módulo é
+// importado só pela fábrica createBrain (caso do chat web do painel).
+let _defaultBrain = null;
+function getDefaultBrain() {
+  if (!_defaultBrain) {
+    _defaultBrain = createBrain({
+      apiKey: process.env.GEMINI_API_KEY,
+      model: process.env.GEMINI_MODEL,
+      displayName: process.env.DISPLAY_NAME || (process.env.INSTANCE_NAME || 'você').replace(/^./, (c) => c.toUpperCase()),
+      store: defaultStore,
+      channelLabel: 'no WhatsApp',
+    });
   }
+  return _defaultBrain;
+}
 
-  return response.text?.trim() || 'Ok.';
+export function handleIncomingMessage(text) {
+  return getDefaultBrain().handleIncomingMessage(text);
 }
