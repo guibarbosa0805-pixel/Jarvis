@@ -23,6 +23,10 @@ const GROUP_NAME = (process.env.GROUP_NAME || '').trim() || null;
 const PHONE_NUMBER = (process.env.PHONE_NUMBER || '').replace(/\D/g, '') || null;
 const TAG = `[jarvis:${INSTANCE}]`;
 const logger = pino({ level: 'silent' });
+// "Jarvis:" em fonte Unicode sans-serif bold — só o nome, pra ficar visualmente
+// diferente das suas mensagens sem depender de formatação do WhatsApp (que não
+// tem fontes, só negrito/itálico/monoespaçado).
+const JARVIS_LABEL = '𝗝𝗮𝗿𝘃𝗶𝘀:';
 
 function extractText(msg) {
   const m = msg.message;
@@ -88,7 +92,7 @@ export async function startWhatsApp() {
           : 'Ainda não consegui identificar a conversa "Mensagens para você mesmo".',
       );
     }
-    const sent = await sock.sendMessage(jarvisJid, { text: `*Jarvis:* ${text}` });
+    const sent = await sock.sendMessage(jarvisJid, { text: `${JARVIS_LABEL} ${text}` });
     if (sent?.key?.id) sentIds.add(sent.key.id);
     return sent;
   }
