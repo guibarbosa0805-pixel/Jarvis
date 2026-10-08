@@ -126,18 +126,40 @@
 
   .empty {
     color: var(--text-muted);
-    margin-top: 16px;
-    text-align: center;
-    font-size: 14px;
-    padding: 40px 20px;
+    margin-top: 14px;
+    text-align: left;
+    font-size: 13px;
+    padding: 14px 16px;
     border: 1px dashed var(--border-strong);
     border-radius: var(--radius);
   }
 
-  section + section { margin-top: 36px; }
+  main > * + * { margin-top: 28px; }
   .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .section-title { font-size: 14px; font-weight: 600; margin: 0; }
+  .section-count { color: var(--text-faint); font-weight: 500; }
   .section-sub { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 0; }
+
+  details.legacy summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  details.legacy summary::-webkit-details-marker { display: none; }
+  details.legacy summary .section-title::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 6px;
+    color: var(--text-faint);
+    transition: transform 0.12s ease;
+  }
+  details.legacy[open] summary .section-title::before { transform: rotate(90deg); }
+  details.legacy .legacy-body { margin-top: 14px; }
+  details.legacy .legacy-body .section-head { align-items: flex-start; }
+  details.legacy .legacy-body .section-sub { margin-top: 0; }
 
   dialog {
     background: var(--surface);
@@ -215,36 +237,37 @@
     <div class="card" id="jarvisCard"></div>
   </section>
 
-  <section>
+  <section id="pendingSection" style="display:none">
     <div class="section-head">
       <h2 class="section-title">Solicitações pendentes</h2>
     </div>
-    <p class="section-sub">Normalmente vazio — quem manda mensagem já é liberado na hora. Só aparece aqui se nenhuma chave Gemini estiver configurada ainda em lugar nenhum.</p>
+    <p class="section-sub">Só aparece se nenhuma chave Gemini estiver configurada ainda em lugar nenhum — normalmente quem manda mensagem já é liberado na hora.</p>
     <div class="grid" id="pendingGrid"></div>
-    <p class="empty" id="pendingEmpty" style="display:none">Nenhuma solicitação no momento.</p>
   </section>
 
   <section>
     <div class="section-head">
-      <h2 class="section-title">Pessoas</h2>
+      <h2 class="section-title">Pessoas <span class="section-count" id="peopleCount"></span></h2>
     </div>
     <p class="section-sub">Quem já conversa com o número principal do Jarvis.</p>
     <div class="grid" id="peopleGrid"></div>
     <p class="empty" id="peopleEmpty" style="display:none">Ninguém aprovado ainda. Peça pra alguém mandar uma mensagem pro número do Jarvis.</p>
   </section>
 
-  <section>
-    <div class="section-head">
-      <h2 class="section-title">Conexões individuais (modo antigo)</h2>
-      <div class="actions">
-        <button class="btn btn-secondary" id="startAllBtn">Conectar todo mundo</button>
-        <button class="btn btn-primary" id="addBtn">Adicionar pessoa</button>
+  <details class="legacy">
+    <summary><h2 class="section-title">Conexões individuais (modo antigo) <span class="section-count" id="legacyCount"></span></h2></summary>
+    <div class="legacy-body">
+      <div class="section-head">
+        <p class="section-sub">Cada pessoa conectando pelo próprio número, sem passar pelo número principal do Jarvis.</p>
+        <div class="actions">
+          <button class="btn btn-secondary" id="startAllBtn">Conectar todo mundo</button>
+          <button class="btn btn-primary" id="addBtn">Adicionar pessoa</button>
+        </div>
       </div>
+      <div class="grid" id="grid"></div>
+      <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
     </div>
-    <p class="section-sub">Cada pessoa conectando pelo próprio número, sem passar pelo número principal do Jarvis.</p>
-    <div class="grid" id="grid"></div>
-    <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
-  </section>
+  </details>
 </main>
 
 <dialog id="addDialog">
@@ -382,6 +405,7 @@ function badgeFor(instance) {
 function render(instances) {
   grid.innerHTML = '';
   emptyMsg.style.display = instances.length === 0 ? 'block' : 'none';
+  document.getElementById('legacyCount').textContent = instances.length ? `(${instances.length})` : '';
   for (const inst of instances) {
     const badge = badgeFor(inst);
     const card = document.createElement('div');
@@ -622,13 +646,13 @@ document.getElementById('confirmJarvisRepair').addEventListener('click', async (
 // --- Solicitações pendentes ---
 
 const pendingGrid = document.getElementById('pendingGrid');
-const pendingEmpty = document.getElementById('pendingEmpty');
+const pendingSection = document.getElementById('pendingSection');
 
 async function refreshPending() {
   const res = await fetch('/api/pending');
   const list = await res.json();
   pendingGrid.innerHTML = '';
-  pendingEmpty.style.display = list.length === 0 ? 'block' : 'none';
+  pendingSection.style.display = list.length === 0 ? 'none' : 'block';
   for (const entry of list) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -664,6 +688,7 @@ async function refreshPeople() {
   const list = await res.json();
   peopleGrid.innerHTML = '';
   peopleEmpty.style.display = list.length === 0 ? 'block' : 'none';
+  document.getElementById('peopleCount').textContent = list.length ? `(${list.length})` : '';
   for (const person of list) {
     const card = document.createElement('div');
     card.className = 'card';

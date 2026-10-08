@@ -24,6 +24,9 @@ const QR_PNG_PATH = `${ROOT}/qr-jarvis.png`;
 const STATUS_KEY = 'jarvis';
 const TAG = '[jarvis]';
 const logger = pino({ level: 'silent' });
+// "Jarvis:" em fonte Unicode sans-serif bold — identifica o remetente em toda
+// mensagem, já que o contato pode não ter o nome "Jarvis" salvo/configurado.
+const JARVIS_LABEL = '𝗝𝗮𝗿𝘃𝗶𝘀:';
 
 const PENDING_NOTICE =
   'Oi! Ainda não fui liberado pra conversar com você. Avisei o administrador — assim que ele te aprovar, a gente continua por aqui. 🙂';
@@ -67,7 +70,7 @@ const MAX_CONSECUTIVE_FAILURES = 6;
 
 export async function sendToPerson(jid, text) {
   if (!sock) throw new Error('Jarvis não está conectado.');
-  return sock.sendMessage(jid, { text });
+  return sock.sendMessage(jid, { text: `${JARVIS_LABEL} ${text}` });
 }
 
 /** Encerra a conexão atual (usado antes de reparear). Não falha se já estiver parada. */
@@ -156,7 +159,7 @@ export async function startJarvisConnection() {
             console.log(`${TAG} Contato pendente (sem chave Gemini configurada): ${entry.pushName || jid} (${jid})`);
             if (!entry.notified) {
               try {
-                await sock.sendMessage(jid, { text: PENDING_NOTICE });
+                await sendToPerson(jid, PENDING_NOTICE);
                 markPendingNotified(jid);
               } catch (err) {
                 console.error(`${TAG} Erro ao avisar contato pendente:`, err.message);
