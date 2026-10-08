@@ -119,13 +119,18 @@
 
   .empty {
     color: var(--text-muted);
-    margin-top: 48px;
+    margin-top: 16px;
     text-align: center;
     font-size: 14px;
     padding: 40px 20px;
     border: 1px dashed var(--border-strong);
     border-radius: var(--radius);
   }
+
+  section + section { margin-top: 36px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .section-title { font-size: 14px; font-weight: 600; margin: 0; }
+  .section-sub { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 0; }
 
   dialog {
     background: var(--surface);
@@ -194,14 +199,45 @@
       <p>Painel de administração</p>
     </div>
   </div>
-  <div class="actions">
-    <button class="btn btn-secondary" id="startAllBtn">Conectar todo mundo</button>
-    <button class="btn btn-primary" id="addBtn">Adicionar pessoa</button>
-  </div>
 </header>
 <main>
-  <div class="grid" id="grid"></div>
-  <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
+  <section>
+    <div class="section-head">
+      <h2 class="section-title">Jarvis — número principal</h2>
+    </div>
+    <div class="card" id="jarvisCard"></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2 class="section-title">Solicitações pendentes</h2>
+    </div>
+    <p class="section-sub">Gente que mandou mensagem pro número do Jarvis e ainda não foi liberada.</p>
+    <div class="grid" id="pendingGrid"></div>
+    <p class="empty" id="pendingEmpty" style="display:none">Nenhuma solicitação no momento.</p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2 class="section-title">Pessoas</h2>
+    </div>
+    <p class="section-sub">Quem já conversa com o número principal do Jarvis.</p>
+    <div class="grid" id="peopleGrid"></div>
+    <p class="empty" id="peopleEmpty" style="display:none">Ninguém aprovado ainda. Peça pra alguém mandar uma mensagem pro número do Jarvis.</p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2 class="section-title">Conexões individuais (modo antigo)</h2>
+      <div class="actions">
+        <button class="btn btn-secondary" id="startAllBtn">Conectar todo mundo</button>
+        <button class="btn btn-primary" id="addBtn">Adicionar pessoa</button>
+      </div>
+    </div>
+    <p class="section-sub">Cada pessoa conectando pelo próprio número, sem passar pelo número principal do Jarvis.</p>
+    <div class="grid" id="grid"></div>
+    <p class="empty" id="emptyMsg" style="display:none">Ainda não tem ninguém por aqui. Clique em "Adicionar pessoa" pra conectar o primeiro WhatsApp.</p>
+  </section>
 </main>
 
 <dialog id="addDialog">
@@ -242,6 +278,48 @@
       <button type="submit" class="btn btn-primary" id="addSubmitBtn">Criar e iniciar</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="personDialog">
+  <h2 id="personDialogTitle">Aprovar pessoa</h2>
+  <form id="personForm">
+    <p class="section-sub" id="personContext" style="margin-bottom: 10px;"></p>
+
+    <label>Nome de exibição</label>
+    <small class="help">Como o Jarvis vai chamá-la nas mensagens.</small>
+    <input name="displayName" placeholder="ex: Maria" required />
+
+    <label>Chave de API do Gemini</label>
+    <input name="geminiApiKey" placeholder="AQ...." required />
+
+    <label>Resumo matinal</label>
+    <small class="help">Horário (HH:mm) em que o Jarvis manda a agenda do dia. Vazio = não envia.</small>
+    <input name="digestTime" placeholder="07:30" value="07:30" />
+
+    <div class="error-msg" id="personError"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" id="cancelPerson">Cancelar</button>
+      <button type="submit" class="btn btn-primary" id="personSubmitBtn">Aprovar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="removePersonDialog">
+  <h2 id="removePersonTitle">Remover pessoa?</h2>
+  <p class="body-text">Ela deixa de conversar com o Jarvis. Se mandar mensagem de novo, vira uma solicitação pendente outra vez.</p>
+  <div class="dialog-actions">
+    <button class="btn btn-secondary" id="cancelRemovePerson">Manter</button>
+    <button class="btn btn-danger-solid" id="confirmRemovePerson">Remover</button>
+  </div>
+</dialog>
+
+<dialog id="jarvisRepairDialog">
+  <h2>Reparear o Jarvis?</h2>
+  <p class="body-text">Desconecta a sessão atual do número principal e gera um QR novo. Todas as pessoas ficam sem resposta até você escanear de novo.</p>
+  <div class="dialog-actions">
+    <button class="btn btn-secondary" id="cancelJarvisRepair">Cancelar</button>
+    <button class="btn btn-primary" id="confirmJarvisRepair">Reparear</button>
+  </div>
 </dialog>
 
 <dialog id="repairDialog">
@@ -488,8 +566,213 @@ function repairInstance(name) {
 const repairDialog = document.getElementById('repairDialog');
 document.getElementById('cancelRepair').addEventListener('click', () => repairDialog.close());
 
+// --- Jarvis: número principal ---
+
+const jarvisCard = document.getElementById('jarvisCard');
+const jarvisRepairDialog = document.getElementById('jarvisRepairDialog');
+
+function jarvisBadgeFor(status) {
+  const s = status?.state;
+  if (s === 'qr') return { cls: 'wait', text: 'Aguardando leitura do QR' };
+  if (s === 'reconnecting') return { cls: 'wait', text: 'Reconectando...' };
+  if (s === 'logged_out') return { cls: 'err', text: 'Sessão expirada — pareie de novo' };
+  if (s === 'error') return { cls: 'err', text: 'Falha ao conectar — tente reparear' };
+  if (s === 'connected') return { cls: 'ok', text: 'Conectado' };
+  return { cls: 'wait', text: 'Conectando...' };
+}
+
+async function refreshJarvis() {
+  const res = await fetch('/api/jarvis/status');
+  const data = await res.json();
+  const badge = jarvisBadgeFor(data.status);
+
+  let extra = '';
+  if (data.status?.state === 'qr' && data.qrUrl) {
+    extra = `<div class="qr-box"><img src="${data.qrUrl}" alt="QR code" /></div>`;
+  }
+
+  jarvisCard.innerHTML = `
+    <div class="card-head">
+      <div class="card-title">Número do Jarvis</div>
+      <span class="status"><span class="dot ${badge.cls}"></span>${badge.text}</span>
+    </div>
+    <div class="card-meta">Conversa com qualquer pessoa aprovada, como um contato normal.</div>
+    ${extra}
+    <div class="card-actions">
+      <button class="btn btn-secondary" id="jarvisRepairBtn">Reparear</button>
+    </div>
+  `;
+  document.getElementById('jarvisRepairBtn').addEventListener('click', () => jarvisRepairDialog.showModal());
+}
+
+document.getElementById('cancelJarvisRepair').addEventListener('click', () => jarvisRepairDialog.close());
+document.getElementById('confirmJarvisRepair').addEventListener('click', async () => {
+  jarvisRepairDialog.close();
+  await fetch('/api/jarvis/repair', { method: 'POST' });
+  refreshJarvis();
+});
+
+// --- Solicitações pendentes ---
+
+const pendingGrid = document.getElementById('pendingGrid');
+const pendingEmpty = document.getElementById('pendingEmpty');
+
+async function refreshPending() {
+  const res = await fetch('/api/pending');
+  const list = await res.json();
+  pendingGrid.innerHTML = '';
+  pendingEmpty.style.display = list.length === 0 ? 'block' : 'none';
+  for (const entry of list) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="card-title">${entry.pushName || '(sem nome)'}</div>
+      <div class="card-meta">${entry.jid.split('@')[0]}</div>
+      <div class="card-actions">
+        <button class="btn btn-primary" data-action="approve">Aprovar</button>
+        <button class="btn btn-danger" data-action="ignore">Ignorar</button>
+      </div>
+    `;
+    card.querySelector('[data-action="approve"]').addEventListener('click', () => openApprove(entry));
+    card.querySelector('[data-action="ignore"]').addEventListener('click', async () => {
+      await fetch('/api/pending/ignore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jid: entry.jid }),
+      });
+      refreshPending();
+    });
+    pendingGrid.appendChild(card);
+  }
+}
+
+// --- Pessoas aprovadas ---
+
+const peopleGrid = document.getElementById('peopleGrid');
+const peopleEmpty = document.getElementById('peopleEmpty');
+let pendingRemovePersonId = null;
+
+async function refreshPeople() {
+  const res = await fetch('/api/people');
+  const list = await res.json();
+  peopleGrid.innerHTML = '';
+  peopleEmpty.style.display = list.length === 0 ? 'block' : 'none';
+  for (const person of list) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="card-title">${person.displayName}</div>
+      <div class="card-meta">${person.jid.split('@')[0]}</div>
+      <div class="card-actions">
+        <button class="btn btn-secondary" data-action="edit">Editar</button>
+        <button class="btn btn-danger" data-action="remove">Remover</button>
+      </div>
+    `;
+    card.querySelector('[data-action="edit"]').addEventListener('click', () => openEditPerson(person));
+    card.querySelector('[data-action="remove"]').addEventListener('click', () => removePersonConfirm(person.id));
+    peopleGrid.appendChild(card);
+  }
+}
+
+function removePersonConfirm(id) {
+  pendingRemovePersonId = id;
+  removePersonDialog.showModal();
+}
+
+const removePersonDialog = document.getElementById('removePersonDialog');
+document.getElementById('cancelRemovePerson').addEventListener('click', () => {
+  pendingRemovePersonId = null;
+  removePersonDialog.close();
+});
+document.getElementById('confirmRemovePerson').addEventListener('click', async () => {
+  const id = pendingRemovePersonId;
+  removePersonDialog.close();
+  if (!id) return;
+  await fetch(`/api/people/${id}`, { method: 'DELETE' });
+  refreshPeople();
+});
+
+// --- Dialog de aprovar/editar pessoa ---
+
+const personDialog = document.getElementById('personDialog');
+const personForm = document.getElementById('personForm');
+let approvingJid = null;
+let editingPersonId = null;
+
+async function openApprove(entry) {
+  approvingJid = entry.jid;
+  editingPersonId = null;
+  document.getElementById('personDialogTitle').textContent = 'Aprovar pessoa';
+  document.getElementById('personSubmitBtn').textContent = 'Aprovar';
+  document.getElementById('personContext').textContent = `${entry.pushName || 'Contato'} — ${entry.jid.split('@')[0]}`;
+  document.getElementById('personError').textContent = '';
+  personForm.reset();
+  personForm.displayName.value = entry.pushName || '';
+  try {
+    const res = await fetch('/api/default-gemini-key');
+    const data = await res.json();
+    if (data.key) personForm.geminiApiKey.value = data.key;
+  } catch {}
+  personDialog.showModal();
+}
+
+function openEditPerson(person) {
+  approvingJid = null;
+  editingPersonId = person.id;
+  document.getElementById('personDialogTitle').textContent = `Editar ${person.displayName}`;
+  document.getElementById('personSubmitBtn').textContent = 'Salvar alterações';
+  document.getElementById('personContext').textContent = person.jid.split('@')[0];
+  document.getElementById('personError').textContent = '';
+  personForm.reset();
+  personForm.displayName.value = person.displayName;
+  personForm.geminiApiKey.value = person.geminiApiKey;
+  personForm.digestTime.value = person.digestTime || '';
+  personDialog.showModal();
+}
+
+document.getElementById('cancelPerson').addEventListener('click', () => personDialog.close());
+
+personForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    displayName: personForm.displayName.value.trim(),
+    geminiApiKey: personForm.geminiApiKey.value.trim(),
+    digestTime: personForm.digestTime.value.trim(),
+  };
+  let url, method;
+  if (editingPersonId) {
+    url = `/api/people/${editingPersonId}`;
+    method = 'PUT';
+  } else {
+    url = '/api/pending/approve';
+    method = 'POST';
+    payload.jid = approvingJid;
+  }
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    document.getElementById('personError').textContent = data.error || 'Erro ao salvar.';
+    return;
+  }
+  personDialog.close();
+  refreshPending();
+  refreshPeople();
+});
+
 refresh();
-setInterval(refresh, 3000);
+refreshJarvis();
+refreshPending();
+refreshPeople();
+setInterval(() => {
+  refresh();
+  refreshJarvis();
+  refreshPending();
+  refreshPeople();
+}, 3000);
 </script>
 </body>
 </html>

@@ -14,6 +14,9 @@ import {
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStatus } from './status.js';
+import { startJarvisConnection, stopJarvisConnection, forgetBrain } from './jarvis.js';
+import { startPeopleScheduler } from './scheduler-people.js';
+import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Normalizado (sem "..") porque res.sendFile recusa com 403 qualquer caminho
@@ -134,11 +137,83 @@ app.get('/api/instances', (req, res) => {
 });
 
 app.get('/api/default-gemini-key', (req, res) => {
+  const existingPerson = listPeople().find((p) => p.geminiApiKey);
+  if (existingPerson) return res.json({ key: existingPerson.geminiApiKey });
   for (const name of listInstanceNames()) {
     const env = parseEnvFile(`${INSTANCES_DIR}/${name}.env`);
     if (env.GEMINI_API_KEY) return res.json({ key: env.GEMINI_API_KEY });
   }
   res.json({ key: '' });
+});
+
+// --- Conexão única do Jarvis (número dedicado) ---
+
+app.get('/api/jarvis/status', (req, res) => {
+  res.json({
+    status: readStatus('jarvis'),
+    qrUrl: existsSync(`${ROOT}/qr-jarvis.png`) ? `/api/jarvis/qr?t=${Date.now()}` : null,
+  });
+});
+
+app.get('/api/jarvis/qr', (req, res) => {
+  const file = `${ROOT}/qr-jarvis.png`;
+  if (!existsSync(file)) return res.status(404).end();
+  res.sendFile(file);
+});
+
+app.post('/api/jarvis/repair', async (req, res) => {
+  stopJarvisConnection();
+  await new Promise((r) => setTimeout(r, 1000));
+  rmSync(`${ROOT}/auth/jarvis`, { recursive: true, force: true });
+  rmSync(`${ROOT}/qr-jarvis.png`, { force: true });
+  rmSync(`${STATUS_DIR}/jarvis.json`, { force: true });
+  try {
+    await startJarvisConnection();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[painel] Erro ao reparear o Jarvis:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Pessoas aprovadas (conversam com o número do Jarvis) ---
+
+app.get('/api/people', (req, res) => {
+  res.json(listPeople());
+});
+
+app.put('/api/people/:id', (req, res) => {
+  const { displayName, geminiApiKey, geminiModel, digestTime } = req.body || {};
+  if (!geminiApiKey) return res.status(400).json({ error: 'Chave Gemini é obrigatória.' });
+  const updated = updatePerson(req.params.id, { displayName, geminiApiKey, geminiModel, digestTime });
+  if (!updated) return res.status(404).json({ error: 'Pessoa não encontrada.' });
+  forgetBrain(req.params.id);
+  res.json({ ok: true, person: updated });
+});
+
+app.delete('/api/people/:id', (req, res) => {
+  forgetBrain(req.params.id);
+  const removed = removePerson(req.params.id);
+  res.json({ ok: removed });
+});
+
+// --- Contatos pendentes (mensagens de quem ainda não foi aprovado) ---
+
+app.get('/api/pending', (req, res) => {
+  res.json(listPending());
+});
+
+app.post('/api/pending/approve', (req, res) => {
+  const { jid, displayName, geminiApiKey, geminiModel, digestTime } = req.body || {};
+  if (!jid) return res.status(400).json({ error: 'jid é obrigatório.' });
+  if (!geminiApiKey) return res.status(400).json({ error: 'Chave Gemini é obrigatória.' });
+  const person = addPerson({ jid, displayName, geminiApiKey, geminiModel, digestTime });
+  res.json({ ok: true, person });
+});
+
+app.post('/api/pending/ignore', (req, res) => {
+  const { jid } = req.body || {};
+  res.json({ ok: removePending(jid) });
 });
 
 app.get('/api/instances/:name/qr', (req, res) => {
@@ -257,3 +332,10 @@ app.delete('/api/instances/:name', (req, res) => {
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[painel] Rodando em http://localhost:${PORT} (só acessível desta máquina)`);
 });
+
+try {
+  await startJarvisConnection();
+  startPeopleScheduler();
+} catch (err) {
+  console.error('[painel] Erro ao iniciar a conexão do Jarvis:', err.message);
+}
