@@ -201,6 +201,17 @@ export async function startJarvisConnection() {
           continue;
         }
 
+        const stickerMsg = msg.message.stickerMessage;
+        if (stickerMsg) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+            events.emit('image', person, buffer, stickerMsg.mimetype || 'image/webp', '', 'sticker');
+          } catch (err) {
+            console.error(`${TAG} Erro ao baixar figurinha de ${person.id}:`, err.message);
+          }
+          continue;
+        }
+
         const text = extractText(msg);
         if (!text) continue;
         events.emit('message', person, text);
@@ -251,11 +262,15 @@ export async function startJarvisConnection() {
     }
   });
 
-  events.on('image', async (person, buffer, mimeType, caption) => {
-    console.log(`${TAG} [${person.id}] Imagem recebida${caption ? ` (legenda: ${caption})` : ''}.`);
+  events.on('image', async (person, buffer, mimeType, caption, kind) => {
+    const isSticker = kind === 'sticker';
+    console.log(`${TAG} [${person.id}] ${isSticker ? 'Figurinha' : 'Imagem'} recebida${caption ? ` (legenda: ${caption})` : ''}.`);
     try {
       const brain = getBrain(person);
-      const prompt = caption || 'Olha essa imagem e me diz o que acha — se tiver algo pra agendar, já sugere.';
+      const defaultPrompt = isSticker
+        ? 'A pessoa mandou essa figurinha. Reaja de forma natural e bem-humorada ao que ela mostra/diz, em uma ou duas frases, e volte pro assunto se fizer sentido.'
+        : 'Olha essa imagem e me diz o que acha — se tiver algo pra agendar, já sugere.';
+      const prompt = caption || defaultPrompt;
       console.log(`${TAG} [${person.id}] Imagem: ${(buffer.length / 1024).toFixed(0)} KB`);
       const reply = await withTimeout(
         brain.handleIncomingMessage(prompt, { data: buffer.toString('base64'), mimeType }),
