@@ -155,7 +155,7 @@ app.get('/api/instances/:name/logs', (req, res) => {
 });
 
 function envFileContent({ groupName, displayName, digestTime, geminiApiKey, geminiModel, phoneNumber }) {
-  const lines = [`GEMINI_API_KEY=${geminiApiKey}`, `GEMINI_MODEL=${geminiModel || 'gemini-2.5-flash'}`];
+  const lines = [`GEMINI_API_KEY=${geminiApiKey}`, `GEMINI_MODEL=${geminiModel || 'gemini-3.5-flash-lite'}`];
   if (displayName) lines.push(`DISPLAY_NAME=${displayName}`);
   if (groupName) lines.push(`GROUP_NAME=${groupName}`);
   lines.push(`DIGEST_TIME=${digestTime || '07:30'}`);

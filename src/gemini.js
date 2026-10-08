@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, createPartFromFunctionResponse } from '@google/genai';
+import { GoogleGenAI, Type, createPartFromFunctionResponse, createUserContent, createPartFromBase64 } from '@google/genai';
 import * as defaultStore from './store.js';
 import { formatDateShort, formatTime } from './format.js';
 
@@ -133,7 +133,7 @@ function runFunction(store, name, args) {
 export function createBrain({ apiKey, model, displayName, store, channelLabel = 'no WhatsApp' }) {
   const ai = new GoogleGenAI({ apiKey });
   const chat = ai.chats.create({
-    model: model || 'gemini-2.5-flash',
+    model: model || 'gemini-3.5-flash-lite',
     config: { systemInstruction: buildSystemInstruction(displayName, channelLabel), tools },
   });
 
@@ -155,6 +155,17 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
 
       return response.text?.trim() || 'Ok.';
     },
+
+    async transcribeAudio(buffer, mimeType) {
+      const response = await ai.models.generateContent({
+        model: model || 'gemini-3.5-flash-lite',
+        contents: createUserContent([
+          'Transcreva o áudio a seguir em português do Brasil. Responda só com o texto transcrito, sem comentários, sem aspas ao redor.',
+          createPartFromBase64(buffer.toString('base64'), mimeType),
+        ]),
+      });
+      return response.text?.trim() || '';
+    },
   };
 }
 
@@ -173,6 +184,10 @@ function getDefaultBrain() {
     });
   }
   return _defaultBrain;
+}
+
+export function transcribeAudio(buffer, mimeType) {
+  return getDefaultBrain().transcribeAudio(buffer, mimeType);
 }
 
 export function handleIncomingMessage(text) {

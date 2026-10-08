@@ -35,7 +35,7 @@ Deixe esse processo rodando (`npm run panel`) — ele mantém as instâncias viv
 2. Copie `instances/example.env` para `instances/<nome-da-pessoa>.env` (ex: `instances/maria.env`) e preencha:
    ```
    GEMINI_API_KEY=sua_chave_aqui
-   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_MODEL=gemini-3.5-flash-lite
    DISPLAY_NAME=Maria
    GROUP_NAME=nome_exato_do_grupo_dela   # deixe vazio para usar "Mensagens para você mesmo"
    DIGEST_TIME=07:30                      # horário do resumo matinal; vazio = sem resumo

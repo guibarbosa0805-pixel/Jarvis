@@ -26,7 +26,7 @@ if (!process.env.GEMINI_API_KEY) {
 // já que whatsapp.js/store.js leem INSTANCE_NAME/GROUP_NAME no topo do módulo.
 const { startWhatsApp } = await import('./whatsapp.js');
 const { startScheduler } = await import('./scheduler.js');
-const { handleIncomingMessage } = await import('./gemini.js');
+const { handleIncomingMessage, transcribeAudio } = await import('./gemini.js');
 
 async function main() {
   const { events, sendToJarvis } = await startWhatsApp();
@@ -40,6 +40,27 @@ async function main() {
       console.error(`${TAG} Erro ao responder:`, err);
       try {
         await sendToJarvis('Deu um erro aqui do meu lado 🙃 tenta de novo.');
+      } catch {
+        // ignore secondary failure
+      }
+    }
+  });
+
+  events.on('audio', async (buffer, mimeType) => {
+    console.log(`${TAG} Áudio recebido, transcrevendo...`);
+    try {
+      const transcript = await transcribeAudio(buffer, mimeType);
+      if (!transcript) {
+        await sendToJarvis('Não consegui entender o áudio — pode tentar de novo ou mandar em texto?');
+        return;
+      }
+      console.log(`${TAG} Transcrito: ${transcript}`);
+      const reply = await handleIncomingMessage(transcript);
+      await sendToJarvis(reply);
+    } catch (err) {
+      console.error(`${TAG} Erro ao processar áudio:`, err);
+      try {
+        await sendToJarvis('Deu um erro ao processar o áudio 🙃 tenta de novo.');
       } catch {
         // ignore secondary failure
       }

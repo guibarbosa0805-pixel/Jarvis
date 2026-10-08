@@ -1,4 +1,11 @@
-import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, jidNormalizedUser } from '@whiskeysockets/baileys';
+import {
+  makeWASocket,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  DisconnectReason,
+  jidNormalizedUser,
+  downloadMediaMessage,
+} from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
 import QRCode from 'qrcode';
@@ -176,6 +183,18 @@ export async function startWhatsApp() {
           continue;
         }
         if (!msg.key.fromMe) continue;
+
+        const audioMsg = msg.message.audioMessage;
+        if (audioMsg) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+            events.emit('audio', buffer, audioMsg.mimetype || 'audio/ogg');
+          } catch (err) {
+            console.error(`${TAG} Erro ao baixar áudio:`, err.message);
+          }
+          continue;
+        }
+
         const text = extractText(msg);
         if (!text) continue;
         events.emit('message', text);
