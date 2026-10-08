@@ -2,7 +2,7 @@ import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, Disconn
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
 import QRCode from 'qrcode';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync, renameSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,9 +35,14 @@ export async function startWhatsApp() {
 
   async function resolveJarvisJid() {
     if (!GROUP_NAME) {
-      if (!jarvisJid && sock?.user?.id) {
-        jarvisJid = jidNormalizedUser(sock.user.id);
-        console.log(`${TAG} Sem grupo configurado — usando a conversa "Mensagens para você mesmo".`);
+      // Contas com o novo sistema de identificação do WhatsApp (LID) usam um JID
+      // "@lid" pra conversa "Mensagens para você mesmo", diferente do JID "@s.whatsapp.net"
+      // baseado no número de telefone. sock.user.lid (quando existe) é o correto;
+      // sock.user.id é o fallback pra contas que ainda não migraram.
+      const myJid = sock?.user?.lid || sock?.user?.id;
+      if (!jarvisJid && myJid) {
+        jarvisJid = jidNormalizedUser(myJid);
+        console.log(`${TAG} Sem grupo configurado — usando a conversa "Mensagens para você mesmo" (${jarvisJid}).`);
         writeStatus(INSTANCE, { groupFound: true, groupName: '(conversa com você mesmo)' });
       }
       return;
@@ -76,7 +81,7 @@ export async function startWhatsApp() {
           : 'Ainda não consegui identificar a conversa "Mensagens para você mesmo".',
       );
     }
-    const sent = await sock.sendMessage(jarvisJid, { text: `🤖 *Jarvis:* ${text}` });
+    const sent = await sock.sendMessage(jarvisJid, { text: `*Jarvis:* ${text}` });
     if (sent?.key?.id) sentIds.add(sent.key.id);
     return sent;
   }
@@ -116,9 +121,13 @@ export async function startWhatsApp() {
       if (qr && !PHONE_NUMBER) {
         console.log(`\n${TAG} Escaneie o QR code no WhatsApp (Aparelhos conectados > Conectar um aparelho):\n`);
         qrcodeTerminal.generate(qr, { small: true });
-        QRCode.toFile(QR_PNG_PATH, qr, { width: 640, margin: 3 }).catch((err) =>
-          console.error(`${TAG} Erro ao gerar ${QR_PNG_PATH}:`, err.message),
-        );
+        // Escreve num arquivo temporário e troca o nome no final: assim quem está
+        // lendo qr-<nome>.png (o painel) nunca pega um PNG pela metade enquanto
+        // o código está sendo trocado.
+        const tmpPath = `${QR_PNG_PATH}.tmp`;
+        QRCode.toFile(tmpPath, qr, { width: 640, margin: 3 })
+          .then(() => renameSync(tmpPath, QR_PNG_PATH))
+          .catch((err) => console.error(`${TAG} Erro ao gerar ${QR_PNG_PATH}:`, err.message));
         writeStatus(INSTANCE, { state: 'qr' });
       }
       if (connection === 'open') {

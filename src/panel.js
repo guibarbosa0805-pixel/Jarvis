@@ -11,12 +11,14 @@ import {
   closeSync,
   rmSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStatus } from './status.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = `${__dirname}/..`;
+// Normalizado (sem "..") porque res.sendFile recusa com 403 qualquer caminho
+// que contenha ".." nos componentes, mesmo sendo absoluto.
+const ROOT = resolve(__dirname, '..');
 const INSTANCES_DIR = `${ROOT}/instances`;
 const LOGS_DIR = `${ROOT}/logs`;
 const STATUS_DIR = `${ROOT}/status`;
@@ -113,7 +115,7 @@ function stopInstance(name) {
 
 const app = express();
 app.use(express.json());
-app.use(express.static(`${__dirname}/../public`));
+app.use(express.static(`${ROOT}/public`));
 
 app.get('/api/instances', (req, res) => {
   const list = listInstanceNames().map((name) => {

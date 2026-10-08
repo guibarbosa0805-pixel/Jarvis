@@ -4,6 +4,7 @@ data/
 instances/*.env
 !instances/example.env
 run.log
+panel.log
 qr-*.png
 status/
 logs/
