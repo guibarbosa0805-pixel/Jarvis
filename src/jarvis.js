@@ -28,6 +28,16 @@ const logger = pino({ level: 'silent' });
 // mensagem, já que o contato pode não ter o nome "Jarvis" salvo/configurado.
 const JARVIS_LABEL = '𝗝𝗮𝗿𝘃𝗶𝘀:';
 
+const MEDIA_TIMEOUT_MS = 90000;
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 const PENDING_NOTICE =
   'Oi! Ainda não fui liberado pra conversar com você. Avisei o administrador — assim que ele te aprovar, a gente continua por aqui. 🙂';
 
@@ -219,13 +229,17 @@ export async function startJarvisConnection() {
     console.log(`${TAG} [${person.id}] Áudio recebido, transcrevendo...`);
     try {
       const brain = getBrain(person);
-      const transcript = await brain.transcribeAudio(buffer, mimeType);
+      const transcript = await withTimeout(
+        brain.transcribeAudio(buffer, mimeType),
+        MEDIA_TIMEOUT_MS,
+        'Tempo esgotado transcrevendo o áudio',
+      );
       if (!transcript) {
         await sendToPerson(person.jid, 'Não consegui entender o áudio — pode tentar de novo ou mandar em texto?');
         return;
       }
       console.log(`${TAG} [${person.id}] Transcrito: ${transcript}`);
-      const reply = await brain.handleIncomingMessage(transcript);
+      const reply = await withTimeout(brain.handleIncomingMessage(transcript), MEDIA_TIMEOUT_MS, 'Tempo esgotado respondendo');
       await sendToPerson(person.jid, reply);
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao processar áudio:`, err);
@@ -242,7 +256,12 @@ export async function startJarvisConnection() {
     try {
       const brain = getBrain(person);
       const prompt = caption || 'Olha essa imagem e me diz o que acha — se tiver algo pra agendar, já sugere.';
-      const reply = await brain.handleIncomingMessage(prompt, { data: buffer.toString('base64'), mimeType });
+      console.log(`${TAG} [${person.id}] Imagem: ${(buffer.length / 1024).toFixed(0)} KB`);
+      const reply = await withTimeout(
+        brain.handleIncomingMessage(prompt, { data: buffer.toString('base64'), mimeType }),
+        MEDIA_TIMEOUT_MS,
+        'Tempo esgotado processando a imagem',
+      );
       await sendToPerson(person.jid, reply);
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao processar imagem:`, err);
