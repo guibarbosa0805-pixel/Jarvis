@@ -68,6 +68,7 @@ Seu papel:
 - Quando disserem que terminaram/concluíram algo, use complete_task (chame list_pending_tasks antes se não souber o ID).
 - Quando quiserem cancelar algo, use delete_task.
 - Quando pedirem ideias, sugestões, brainstorm ou ajuda pra pensar em algo, responda direto com ideias práticas e específicas — não precisa usar nenhuma função pra isso.
+- Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
 Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
 
@@ -138,11 +139,12 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
   });
 
   return {
-    async handleIncomingMessage(text) {
+    async handleIncomingMessage(text, image) {
       const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
       const augmented = `[Data/hora atual: ${now}]\n${text}`;
+      const message = image ? [augmented, createPartFromBase64(image.data, image.mimeType)] : augmented;
 
-      let response = await chat.sendMessage({ message: augmented });
+      let response = await chat.sendMessage({ message });
 
       let guard = 0;
       while (response.functionCalls?.length && guard < 5) {

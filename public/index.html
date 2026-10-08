@@ -86,7 +86,9 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 18px;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
+  .card.card-ok { background: rgba(53, 197, 106, 0.1); border-color: rgba(53, 197, 106, 0.4); }
   .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .card-title { font-size: 15px; font-weight: 600; }
   .card-meta { color: var(--text-muted); font-size: 13px; margin-top: 3px; }
@@ -622,6 +624,7 @@ async function refreshJarvis() {
     extra = `<div class="qr-box"><img src="${data.qrUrl}" alt="QR code" /></div>`;
   }
 
+  jarvisCard.className = `card${badge.cls === 'ok' ? ' card-ok' : ''}`;
   jarvisCard.innerHTML = `
     <div class="card-head">
       <div class="card-title">Número do Jarvis</div>

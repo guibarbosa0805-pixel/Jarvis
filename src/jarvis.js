@@ -180,6 +180,17 @@ export async function startJarvisConnection() {
           continue;
         }
 
+        const imageMsg = msg.message.imageMessage;
+        if (imageMsg) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+            events.emit('image', person, buffer, imageMsg.mimetype || 'image/jpeg', imageMsg.caption || '');
+          } catch (err) {
+            console.error(`${TAG} Erro ao baixar imagem de ${person.id}:`, err.message);
+          }
+          continue;
+        }
+
         const text = extractText(msg);
         if (!text) continue;
         events.emit('message', person, text);
@@ -220,6 +231,23 @@ export async function startJarvisConnection() {
       console.error(`${TAG} [${person.id}] Erro ao processar áudio:`, err);
       try {
         await sendToPerson(person.jid, 'Deu um erro ao processar o áudio 🙃 tenta de novo.');
+      } catch {
+        // ignore secondary failure
+      }
+    }
+  });
+
+  events.on('image', async (person, buffer, mimeType, caption) => {
+    console.log(`${TAG} [${person.id}] Imagem recebida${caption ? ` (legenda: ${caption})` : ''}.`);
+    try {
+      const brain = getBrain(person);
+      const prompt = caption || 'Olha essa imagem e me diz o que acha — se tiver algo pra agendar, já sugere.';
+      const reply = await brain.handleIncomingMessage(prompt, { data: buffer.toString('base64'), mimeType });
+      await sendToPerson(person.jid, reply);
+    } catch (err) {
+      console.error(`${TAG} [${person.id}] Erro ao processar imagem:`, err);
+      try {
+        await sendToPerson(person.jid, 'Deu um erro ao processar a imagem 🙃 tenta de novo.');
       } catch {
         // ignore secondary failure
       }
