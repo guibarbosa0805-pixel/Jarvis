@@ -78,6 +78,20 @@ let sock = null;
 let consecutiveFailures = 0;
 const MAX_CONSECUTIVE_FAILURES = 6;
 
+async function setTyping(jid, on) {
+  try {
+    await sock?.sendPresenceUpdate(on ? 'composing' : 'paused', jid);
+  } catch {
+    // indicador de "digitando" é só cosmético
+  }
+}
+
+function errorNotice(err, what) {
+  const overloaded = err?.status === 503 || /UNAVAILABLE|high demand/i.test(String(err?.message));
+  if (overloaded) return 'O serviço de IA está com muita demanda agora 🙃 tenta de novo em um minutinho.';
+  return what ? `Deu um erro ao processar ${what} 🙃 tenta de novo.` : 'Deu um erro aqui do meu lado 🙃 tenta de novo.';
+}
+
 export async function sendToPerson(jid, text) {
   if (!sock) throw new Error('Jarvis não está conectado.');
   return sock.sendMessage(jid, { text: `${JARVIS_LABEL} ${text}` });
@@ -96,6 +110,19 @@ export function stopJarvisConnection() {
 
 export async function startJarvisConnection() {
   const events = new EventEmitter();
+
+  // Mostra "digitando..." pra pessoa enquanto o Jarvis processa (com retentativas
+  // do Gemini a resposta pode levar alguns segundos).
+  function onGuarded(event, handler) {
+    events.on(event, async (person, ...args) => {
+      await setTyping(person.jid, true);
+      try {
+        await handler(person, ...args);
+      } finally {
+        await setTyping(person.jid, false);
+      }
+    });
+  }
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
   async function connect() {
@@ -221,7 +248,7 @@ export async function startJarvisConnection() {
 
   await connect();
 
-  events.on('message', async (person, text) => {
+  onGuarded('message', async (person, text) => {
     console.log(`${TAG} [${person.id}] Recebido: ${text}`);
     try {
       const reply = await getBrain(person).handleIncomingMessage(text);
@@ -229,14 +256,14 @@ export async function startJarvisConnection() {
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao responder:`, err);
       try {
-        await sendToPerson(person.jid, 'Deu um erro aqui do meu lado 🙃 tenta de novo.');
+        await sendToPerson(person.jid, errorNotice(err));
       } catch {
         // ignore secondary failure
       }
     }
   });
 
-  events.on('audio', async (person, buffer, mimeType) => {
+  onGuarded('audio', async (person, buffer, mimeType) => {
     console.log(`${TAG} [${person.id}] Áudio recebido, transcrevendo...`);
     try {
       const brain = getBrain(person);
@@ -255,14 +282,14 @@ export async function startJarvisConnection() {
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao processar áudio:`, err);
       try {
-        await sendToPerson(person.jid, 'Deu um erro ao processar o áudio 🙃 tenta de novo.');
+        await sendToPerson(person.jid, errorNotice(err, 'o áudio'));
       } catch {
         // ignore secondary failure
       }
     }
   });
 
-  events.on('image', async (person, buffer, mimeType, caption, kind) => {
+  onGuarded('image', async (person, buffer, mimeType, caption, kind) => {
     const isSticker = kind === 'sticker';
     console.log(`${TAG} [${person.id}] ${isSticker ? 'Figurinha' : 'Imagem'} recebida${caption ? ` (legenda: ${caption})` : ''}.`);
     try {
@@ -281,7 +308,7 @@ export async function startJarvisConnection() {
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao processar imagem:`, err);
       try {
-        await sendToPerson(person.jid, 'Deu um erro ao processar a imagem 🙃 tenta de novo.');
+        await sendToPerson(person.jid, errorNotice(err, 'a imagem'));
       } catch {
         // ignore secondary failure
       }

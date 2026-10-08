@@ -56,6 +56,28 @@ const tools = [
   },
 ];
 
+const RETRY_DELAYS_MS = [1500, 4000, 8000];
+
+function isTransient(err) {
+  const msg = String(err?.message || '');
+  // Cota diária estourada não se resolve tentando de novo em segundos.
+  if (/PerDay|per day/i.test(msg)) return false;
+  if ([429, 500, 503, 504].includes(err?.status)) return true;
+  return /UNAVAILABLE|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i.test(msg);
+}
+
+/** Repete chamadas ao Gemini em falhas passageiras (ex: 503 "high demand"). */
+async function withRetry(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= RETRY_DELAYS_MS.length || !isTransient(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 function buildSystemInstruction(displayName, channelLabel) {
   return `Você é o Jarvis, secretário(a) pessoal particular de ${displayName}. Vocês conversam ${channelLabel}, só vocês dois, pra organizar a vida dele(a).
 
@@ -151,7 +173,7 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
       const augmented = `[Data/hora atual: ${now}]\n${text}`;
       const message = image ? [augmented, createPartFromBase64(image.data, image.mimeType)] : augmented;
 
-      let response = await chat.sendMessage({ message });
+      let response = await withRetry(() => chat.sendMessage({ message }));
 
       let guard = 0;
       while (response.functionCalls?.length && guard < 5) {
@@ -159,20 +181,20 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
         const responseParts = response.functionCalls.map((call) =>
           createPartFromFunctionResponse(call.id ?? call.name, call.name, runFunction(store, call.name, call.args || {})),
         );
-        response = await chat.sendMessage({ message: responseParts });
+        response = await withRetry(() => chat.sendMessage({ message: responseParts }));
       }
 
       return response.text?.trim() || 'Ok.';
     },
 
     async transcribeAudio(buffer, mimeType) {
-      const response = await ai.models.generateContent({
+      const response = await withRetry(() => ai.models.generateContent({
         model: model || 'gemini-3.5-flash-lite',
         contents: createUserContent([
           'Transcreva o áudio a seguir em português do Brasil. Responda só com o texto transcrito, sem comentários, sem aspas ao redor.',
           createPartFromBase64(buffer.toString('base64'), mimeType),
         ]),
-      });
+      }));
       return response.text?.trim() || '';
     },
   };
