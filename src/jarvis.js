@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { writeStatus } from './status.js';
 import { createStore } from './store.js';
 import { createBrain } from './gemini.js';
-import { findPersonByJid, addOrTouchPending, markPendingNotified } from './people.js';
+import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = `${__dirname}/..`;
@@ -137,19 +137,33 @@ export async function startJarvisConnection() {
         const jid = msg.key.remoteJid;
         if (!jid || isGroupOrBroadcast(jid)) continue;
 
-        const person = findPersonByJid(jid);
+        let person = findPersonByJid(jid);
         if (!person) {
-          const entry = addOrTouchPending(jid, msg.pushName || '');
-          console.log(`${TAG} Contato pendente: ${entry.pushName || jid} (${jid})`);
-          if (!entry.notified) {
-            try {
-              await sock.sendMessage(jid, { text: PENDING_NOTICE });
-              markPendingNotified(jid);
-            } catch (err) {
-              console.error(`${TAG} Erro ao avisar contato pendente:`, err.message);
+          const defaults = findDefaultGeminiKey();
+          if (defaults) {
+            person = addPerson({
+              jid,
+              displayName: msg.pushName || jid.split('@')[0],
+              geminiApiKey: defaults.apiKey,
+              geminiModel: defaults.model,
+            });
+            console.log(`${TAG} Pessoa nova auto-registrada: ${person.displayName} (${jid})`);
+          } else {
+            // Sem nenhuma chave Gemini disponível ainda em lugar nenhum — não dá
+            // pra auto-registrar. Fica como pendente até alguém ser aprovado
+            // manualmente (o que destrava o auto-registro pros próximos).
+            const entry = addOrTouchPending(jid, msg.pushName || '');
+            console.log(`${TAG} Contato pendente (sem chave Gemini configurada): ${entry.pushName || jid} (${jid})`);
+            if (!entry.notified) {
+              try {
+                await sock.sendMessage(jid, { text: PENDING_NOTICE });
+                markPendingNotified(jid);
+              } catch (err) {
+                console.error(`${TAG} Erro ao avisar contato pendente:`, err.message);
+              }
             }
+            continue;
           }
-          continue;
         }
 
         const audioMsg = msg.message.audioMessage;

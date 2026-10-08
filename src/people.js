@@ -1,10 +1,11 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = `${__dirname}/../data`;
+const INSTANCES_DIR = `${__dirname}/../instances`;
 const PEOPLE_FILE = `${DATA_DIR}/people.json`;
 const PENDING_FILE = `${DATA_DIR}/pending-contacts.json`;
 
@@ -34,6 +35,25 @@ export function findPersonByJid(jid) {
 
 export function findPersonById(id) {
   return listPeople().find((p) => p.id === id) || null;
+}
+
+/**
+ * Chave/modelo Gemini pra usar no auto-registro de gente nova: reaproveita a
+ * de alguém já cadastrado, ou (bootstrap) a de alguma instância do modo antigo.
+ */
+export function findDefaultGeminiKey() {
+  const existing = listPeople().find((p) => p.geminiApiKey);
+  if (existing) return { apiKey: existing.geminiApiKey, model: existing.geminiModel };
+
+  if (existsSync(INSTANCES_DIR)) {
+    for (const file of readdirSync(INSTANCES_DIR)) {
+      if (!file.endsWith('.env') || file === 'example.env') continue;
+      const content = readFileSync(`${INSTANCES_DIR}/${file}`, 'utf8');
+      const apiKey = content.match(/^GEMINI_API_KEY=(.*)$/m)?.[1]?.trim();
+      if (apiKey) return { apiKey, model: content.match(/^GEMINI_MODEL=(.*)$/m)?.[1]?.trim() };
+    }
+  }
+  return null;
 }
 
 export function addPerson({ jid, displayName, geminiApiKey, geminiModel, digestTime }) {
