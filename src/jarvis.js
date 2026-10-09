@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { writeStatus } from './status.js';
 import { createStore } from './store.js';
 import { createBrain } from './gemini.js';
-import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, findDefaultGeminiKey } from './people.js';
+import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, updatePerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = `${__dirname}/..`;
@@ -205,6 +205,8 @@ export async function startJarvisConnection() {
             continue;
           }
         }
+
+        updatePerson(person.id, { lastMessageAt: new Date().toISOString() });
 
         const audioMsg = msg.message.audioMessage;
         if (audioMsg) {

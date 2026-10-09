@@ -486,11 +486,11 @@ document.getElementById('confirmRemove').addEventListener('click', async () => {
   refresh();
 });
 
-async function openLogs(name) {
+async function openLogs(name, url = `/api/instances/${name}/logs`) {
   document.getElementById('logsTitle').textContent = `Logs de ${name}`;
   const pre = document.getElementById('logsPre');
   async function load() {
-    const res = await fetch(`/api/instances/${name}/logs`);
+    const res = await fetch(url);
     const data = await res.json();
     pre.textContent = data.lines.join('\n');
     pre.scrollTop = pre.scrollHeight;
@@ -633,9 +633,11 @@ async function refreshJarvis() {
     <div class="card-meta">Conversa com qualquer pessoa aprovada, como um contato normal.</div>
     ${extra}
     <div class="card-actions">
+      <button class="btn btn-secondary" id="jarvisLogsBtn">Ver logs</button>
       <button class="btn btn-secondary" id="jarvisRepairBtn">Reparear</button>
     </div>
   `;
+  document.getElementById('jarvisLogsBtn').addEventListener('click', () => openLogs('Jarvis', '/api/jarvis/logs'));
   document.getElementById('jarvisRepairBtn').addEventListener('click', () => jarvisRepairDialog.showModal());
 }
 
@@ -686,6 +688,16 @@ const peopleGrid = document.getElementById('peopleGrid');
 const peopleEmpty = document.getElementById('peopleEmpty');
 let pendingRemovePersonId = null;
 
+function fmtLast(iso) {
+  if (!iso) return 'ainda sem mensagens';
+  const d = new Date(iso);
+  const mins = Math.round((Date.now() - d) / 60000);
+  if (mins < 1) return 'agora';
+  if (mins < 60) return `há ${mins} min`;
+  if (mins < 60 * 24) return `há ${Math.floor(mins / 60)} h`;
+  return `${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 async function refreshPeople() {
   const res = await fetch('/api/people');
   const list = await res.json();
@@ -698,6 +710,7 @@ async function refreshPeople() {
     card.innerHTML = `
       <div class="card-title">${person.displayName}</div>
       <div class="card-meta">${person.jid.split('@')[0]}</div>
+      <div class="card-meta">Última mensagem: ${fmtLast(person.lastMessageAt)}</div>
       <div class="card-actions">
         <button class="btn btn-secondary" data-action="edit">Editar</button>
         <button class="btn btn-danger" data-action="remove">Remover</button>

@@ -1,4 +1,6 @@
 import express from 'express';
+import { config as loadEnv } from 'dotenv';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
   readdirSync,
@@ -22,11 +24,34 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Normalizado (sem "..") porque res.sendFile recusa com 403 qualquer caminho
 // que contenha ".." nos componentes, mesmo sendo absoluto.
 const ROOT = resolve(__dirname, '..');
+
+// panel.env (fora do git) define PANEL_HOST / PANEL_PASSWORD / PANEL_PORT.
+loadEnv({ path: `${ROOT}/panel.env`, quiet: true });
+
 const INSTANCES_DIR = `${ROOT}/instances`;
 const LOGS_DIR = `${ROOT}/logs`;
 const STATUS_DIR = `${ROOT}/status`;
 const PIDS_FILE = `${STATUS_DIR}/pids.json`;
 const PORT = Number(process.env.PANEL_PORT) || 4545;
+const PANEL_PASSWORD = process.env.PANEL_PASSWORD || '';
+let HOST = process.env.PANEL_HOST || '127.0.0.1';
+const isLoopback = (h) => h === '127.0.0.1' || h === 'localhost' || h === '::1';
+if (!isLoopback(HOST) && !PANEL_PASSWORD) {
+  console.warn('[painel] PANEL_HOST aberto na rede, mas sem PANEL_PASSWORD — voltando pra 127.0.0.1 por segurança.');
+  HOST = '127.0.0.1';
+}
+
+const sha256 = (s) => createHash('sha256').update(s).digest();
+
+function requireAuth(req, res, next) {
+  if (!PANEL_PASSWORD) return next();
+  const [scheme, encoded] = (req.headers.authorization || '').split(' ');
+  if (scheme === 'Basic' && encoded) {
+    const given = Buffer.from(encoded, 'base64').toString().split(':').slice(1).join(':');
+    if (timingSafeEqual(sha256(given), sha256(PANEL_PASSWORD))) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="Jarvis"').status(401).send('Autenticação necessária.');
+}
 
 for (const dir of [INSTANCES_DIR, LOGS_DIR, STATUS_DIR]) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -117,6 +142,7 @@ function stopInstance(name) {
 }
 
 const app = express();
+app.use(requireAuth);
 app.use(express.json());
 app.use(express.static(`${ROOT}/public`));
 
@@ -153,6 +179,19 @@ app.get('/api/jarvis/status', (req, res) => {
     status: readStatus('jarvis'),
     qrUrl: existsSync(`${ROOT}/qr-jarvis.png`) ? `/api/jarvis/qr?t=${Date.now()}` : null,
   });
+});
+
+// Só linhas do próprio Jarvis/painel: o log bruto também recebe dumps de sessão
+// do Signal (com chaves), que não devem sair pela rede.
+app.get('/api/jarvis/logs', (req, res) => {
+  const file = `${LOGS_DIR}/panel.log`;
+  if (!existsSync(file)) return res.json({ lines: [] });
+  const lines = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((l) => /^\[(jarvis|painel)\]|iniciando painel|painel encerrou/.test(l))
+    .map((l) => l.replace(/(Recebido|Transcrito): .*/, '$1: (conteúdo oculto)'))
+    .slice(-150);
+  res.json({ lines });
 });
 
 app.get('/api/jarvis/qr', (req, res) => {
@@ -329,13 +368,21 @@ app.delete('/api/instances/:name', (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[painel] Rodando em http://localhost:${PORT} (só acessível desta máquina)`);
+app.listen(PORT, HOST, () => {
+  console.log(
+    isLoopback(HOST)
+      ? `[painel] Rodando em http://localhost:${PORT} (só acessível desta máquina)`
+      : `[painel] Rodando em http://${HOST}:${PORT} (acessível pela rede, protegido por senha)`,
+  );
 });
 
-try {
-  await startJarvisConnection();
-  startPeopleScheduler();
-} catch (err) {
-  console.error('[painel] Erro ao iniciar a conexão do Jarvis:', err.message);
+// JARVIS_DISABLED=1 sobe só o painel, sem WhatsApp nem lembretes (útil pra testar
+// a interface sem derrubar a sessão que está rodando em outro lugar).
+if (process.env.JARVIS_DISABLED !== '1') {
+  try {
+    await startJarvisConnection();
+    startPeopleScheduler();
+  } catch (err) {
+    console.error('[painel] Erro ao iniciar a conexão do Jarvis:', err.message);
+  }
 }
