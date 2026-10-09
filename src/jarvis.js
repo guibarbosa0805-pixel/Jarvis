@@ -146,7 +146,7 @@ export async function startJarvisConnection() {
         console.log(`${TAG} Conectado ao WhatsApp.`);
         consecutiveFailures = 0;
         if (existsSync(QR_PNG_PATH)) unlinkSync(QR_PNG_PATH);
-        writeStatus(STATUS_KEY, { state: 'connected', pairingCode: null });
+        writeStatus(STATUS_KEY, { state: 'connected', pairingCode: null, error: null });
       }
       if (connection === 'close') {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
