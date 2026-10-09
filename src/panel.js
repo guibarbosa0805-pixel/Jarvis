@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { readStatus } from './status.js';
 import { startJarvisConnection, stopJarvisConnection, forgetBrain } from './jarvis.js';
 import { startPeopleScheduler } from './scheduler-people.js';
-import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending } from './people.js';
+import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending, migrateDigestDefaults } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Normalizado (sem "..") porque res.sendFile recusa com 403 qualquer caminho
@@ -380,6 +380,8 @@ app.listen(PORT, HOST, () => {
 // a interface sem derrubar a sessão que está rodando em outro lugar).
 if (process.env.JARVIS_DISABLED !== '1') {
   try {
+    const migrated = migrateDigestDefaults();
+    if (migrated) console.log(`[painel] Resumo matinal (07:30) ligado por padrão pra ${migrated} pessoa(s).`);
     await startJarvisConnection();
     startPeopleScheduler();
   } catch (err) {

@@ -8,6 +8,7 @@ const DATA_DIR = `${__dirname}/../data`;
 const INSTANCES_DIR = `${__dirname}/../instances`;
 const PEOPLE_FILE = `${DATA_DIR}/people.json`;
 const PENDING_FILE = `${DATA_DIR}/pending-contacts.json`;
+const DEFAULT_DIGEST_TIME = '07:30';
 
 function ensureFile(file) {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
@@ -69,13 +70,29 @@ export function addPerson({ jid, displayName, geminiApiKey, geminiModel, digestT
     displayName: displayName || jid.split('@')[0],
     geminiApiKey,
     geminiModel: geminiModel || 'gemini-3.5-flash-lite',
-    digestTime: digestTime || '',
+    // undefined = padrão (07:30); '' = a pessoa escolheu não receber resumo.
+    digestTime: digestTime === undefined ? DEFAULT_DIGEST_TIME : digestTime,
+    digestMigrated: true,
     createdAt: new Date().toISOString(),
   };
   people.push(person);
   writeJson(PEOPLE_FILE, people);
   removePending(jid);
   return person;
+}
+
+/** Liga o resumo matinal pra quem foi cadastrado antes dele ser padrão (uma vez só). */
+export function migrateDigestDefaults() {
+  const people = listPeople();
+  let changed = 0;
+  for (const person of people) {
+    if (person.digestMigrated) continue;
+    if (!person.digestTime) person.digestTime = DEFAULT_DIGEST_TIME;
+    person.digestMigrated = true;
+    changed++;
+  }
+  if (changed) writeJson(PEOPLE_FILE, people);
+  return changed;
 }
 
 export function updatePerson(id, patch) {
