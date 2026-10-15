@@ -9,6 +9,10 @@ import { createPairingCode, isDesktopOnline, pushToDesktop } from './desktop.js'
 import { findPersonById, updatePerson } from './people.js';
 
 
+// Modelos de voz em ordem de preferência; o dia em que cada um esgotou a cota (pra não insistir).
+const ttsModels = () => (process.env.GEMINI_TTS_MODEL || 'gemini-3.8-flash-lite-tts,gemini-3.8-flash-tts').split(',').map((m) => m.trim()).filter(Boolean);
+const ttsExhausted = new Map();
+
 const tools = [
   {
     functionDeclarations: [
@@ -49,7 +53,7 @@ const tools = [
           'Toca uma música, artista, álbum ou playlist no computador da pessoa (se o app do Jarvis estiver aberto lá). Use quando pedirem pra tocar/colocar música (ex: "toca AC/DC", "põe um som pra focar"). Se não houver computador conectado, o resultado traz um link pra você mandar.',
         parameters: {
           type: Type.OBJECT,
-          properties: { query: { type: Type.STRING, description: 'O que tocar, como seria digitado numa busca (ex: "AC/DC Thunderstruck", "música calma para trabalhar").' } },
+          properties: { query: { type: Type.STRING, description: 'O que tocar, como seria digitado numa busca (ex: "AC/DC Thunderstruck", "música calma para trabalhar"). Se a pessoa mandou um link do YouTube/YouTube Music, passe o link exatamente como veio: toca aquele vídeo.' } },
           required: ['query'],
         },
       },
@@ -70,7 +74,7 @@ const tools = [
           type: Type.OBJECT,
           properties: {
             reply: { type: Type.STRING, description: 'Frase que será falada em voz alta (ex: "Bom dia, senhor. Seja bem-vindo novamente."). Escreva já corrigida e bem pontuada.' },
-            music: { type: Type.STRING, description: 'Busca da música a tocar (ex: "AC/DC Shoot to Thrill"). Corrija erros de digitação do nome. Vazio = sem música.' },
+            music: { type: Type.STRING, description: 'Música a tocar: uma busca (ex: "AC/DC Shoot to Thrill", corrija erros de digitação) ou, se a pessoa mandou um link do YouTube/YouTube Music, o link exatamente como veio (toca aquele vídeo). Vazio = sem música.' },
             remove: { type: Type.BOOLEAN, description: 'true para remover a rotina.' },
           },
         },
@@ -181,7 +185,7 @@ Seu papel:
 - Voz: você consegue responder em áudio. Se ${displayName} mandar um áudio, a resposta já vai por voz automaticamente; se pedir por texto pra você responder/falar em áudio, chame reply_with_voice. Em resposta por voz, escreva em frases curtas e naturais de fala, sem listas longas. Nunca diga que não consegue enviar áudio.
 - Rotina de bom dia: se ${displayName} pedir pra configurar o que acontece quando ela(e) manda "bom dia" (ex: responder por voz com uma frase e já tocar uma música), chame set_good_morning_routine com a frase (corrigida e bem pontuada) e a busca da música, e confirme. A música só toca se o app do Jarvis estiver aberto no computador; avise isso na confirmação. Depois de configurada, o "bom dia" sozinho dispara a rotina automaticamente.
 - Música: você toca músicas no computador da pessoa, quando o app do Jarvis está aberto lá. Se pedirem música, artista ou um som pra ambientar (ex: "toca AC/DC", "põe um som pra focar"), chame play_music com a busca e responda curto e com bom humor dizendo o que está tocando (use o "title" do resultado). Para pausar, continuar, parar ou mudar o volume, use control_music. Se o resultado de play_music vier com playing_on null (nenhum PC conectado), explique que o app precisa estar aberto no computador e mande o "url" pra pessoa abrir. Se falhar, ofereça os links de busca (search_links).
-- App do computador: se ${displayName} pedir pra usar/conectar o Jarvis no PC ou computador (inclusive frases curtas como "conectar meu computador" ou "quero usar no PC" — aqui "conectar o computador" sempre significa o app do Jarvis, nunca TV, monitor ou rede), chame connect_desktop_app sem fazer perguntas e passe o código de 6 dígitos (vale pelo tempo indicado em expiresInMinutes), explicando que é só abrir o app do Jarvis no computador e digitar o código. Mensagens com "[Canal: app do Jarvis no computador]" vêm do app: lá não vale a formatação do WhatsApp (sem asteriscos), então responda em texto simples e curto.
+- App do computador: se ${displayName} pedir pra usar/conectar o Jarvis no PC ou computador (inclusive frases curtas como "conectar meu computador" ou "quero usar no PC" — aqui "conectar o computador" sempre significa o app do Jarvis, nunca TV, monitor ou rede), chame connect_desktop_app sem fazer perguntas e passe o código de 6 dígitos (vale pelo tempo indicado em expiresInMinutes), explicando que é só abrir o app do Jarvis no computador e digitar o código. Mensagens com "[Canal: chamada de voz no app do Jarvis]" são uma ligação: a pessoa fala com você e ouve a resposta (a transcrição pode ter erros de ouvido, então interprete com bom senso). Responda como numa ligação telefônica: de 1 a 3 frases curtas e naturais, sem listas, emojis, asteriscos, números de item ou links (se precisar de um link, diga que deixou escrito na tela e inclua o link no texto). Mensagens com "[Canal: app do Jarvis no computador]" vêm do app: lá não vale a formatação do WhatsApp (sem asteriscos), então responda em texto simples e curto.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
 Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
@@ -337,10 +341,10 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
   let restoredPending = restored.length > 0;
   let chat = makeChat(restored);
 
-  async function runTurn(text, image, channel) {
+  async function runTurn(text, image, channel, call = false) {
     const flags = { wipe: false, voice: false, channel, actions: [] };
     const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
-    const where = channel === 'desktop' ? 'app do Jarvis no computador' : 'WhatsApp';
+    const where = call ? 'chamada de voz no app do Jarvis' : channel === 'desktop' ? 'app do Jarvis no computador' : 'WhatsApp';
     const augmented = `[Data/hora atual: ${now}] [Canal: ${where}]\n${text}`;
     const message = image ? [augmented, createPartFromBase64(image.data, image.mimeType)] : augmented;
 
@@ -399,21 +403,21 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
     return { text: spoken, voice: true, actions: flags.actions };
   }
 
-  async function converse(text, image, channel) {
+  async function converse(text, image, channel, call) {
     const routine = image ? null : await goodMorningRoutine(text, channel);
     if (routine) {
       recordExchange(text, routine.text);
       return routine;
     }
     try {
-      return await runTurn(text, image, channel);
+      return await runTurn(text, image, channel, call);
     } catch (err) {
       // Histórico antigo recusado pela API: começa do zero em vez de ficar quebrado pra sempre.
       if (err?.status === 400 && restoredPending) {
         restoredPending = false;
         memory?.clearHistory();
         chat = makeChat([]);
-        return runTurn(text, image, channel);
+        return runTurn(text, image, channel, call);
       }
       throw err;
     }
@@ -427,23 +431,36 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
     async speak(text) {
       const spoken = speakableText(text).slice(0, MAX_SPOKEN_CHARS);
       if (!spoken) return null;
-      const response = await withRetry(() => ai.models.generateContent({
-        model: process.env.GEMINI_TTS_MODEL || 'gemini-3.8-flash-lite-tts',
-        contents: [{ parts: [{ text: spoken }] }],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.JARVIS_VOICE || 'Charon' } } },
-        },
-      }));
-      const inline = response.candidates?.[0]?.content?.parts?.find((p) => p.inlineData)?.inlineData;
-      if (!inline?.data) throw new Error('TTS não devolveu áudio.');
-      return wavToOggOpus(Buffer.from(inline.data, 'base64'), inline.mimeType);
+      const today = new Date().toDateString();
+      let lastError = null;
+      // Cada modelo de voz tem cota diária própria no plano gratuito: usa o próximo quando um esgota.
+      for (const model of ttsModels()) {
+        if (ttsExhausted.get(model) === today) continue;
+        try {
+          const response = await withRetry(() => ai.models.generateContent({
+            model,
+            contents: [{ parts: [{ text: spoken }] }],
+            config: {
+              responseModalities: ['AUDIO'],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.JARVIS_VOICE || 'Charon' } } },
+            },
+          }));
+          const inline = response.candidates?.[0]?.content?.parts?.find((p) => p.inlineData)?.inlineData;
+          if (!inline?.data) throw new Error('TTS não devolveu áudio.');
+          return await wavToOggOpus(Buffer.from(inline.data, 'base64'), inline.mimeType);
+        } catch (err) {
+          lastError = err;
+          if (err?.status === 429 || /RESOURCE_EXHAUSTED|PerDay/i.test(String(err?.message))) ttsExhausted.set(model, today);
+          else throw err;
+        }
+      }
+      throw lastError || new Error('Cota diária da voz esgotada.');
     },
 
     /** Um turno de conversa: { text, voice (pediu resposta em áudio), actions (ações pro app do PC) }. */
-    converse(text, image, { channel = 'whatsapp' } = {}) {
+    converse(text, image, { channel = 'whatsapp', call = false } = {}) {
       const turn = queue.then(async () => {
-        const result = await converse(text, image, channel);
+        const result = await converse(text, image, channel, call);
         // Mostra no app do computador o que aconteceu no WhatsApp (é a mesma conversa).
         if (channel !== 'desktop' && personId) pushToDesktop(personId, { type: 'chat', user: text, reply: result.text });
         return result;

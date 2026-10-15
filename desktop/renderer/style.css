@@ -99,3 +99,15 @@ header {
 @media (prefers-reduced-motion: reduce) { .icon-btn.recording { animation: none; } }
 
 footer { display: flex; justify-content: space-between; align-items: center; padding: 0 16px 12px; font-size: 12px; }
+
+.header-actions { display: flex; align-items: center; gap: 14px; }
+.call-btn { border-color: var(--success); color: var(--success); font-weight: 600; padding: 6px 14px; }
+.call-btn:hover { background: rgba(53, 197, 106, 0.12); }
+.call-btn.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+.call-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; background: rgba(53, 197, 106, 0.1); border-bottom: 1px solid var(--border);
+}
+.call-status { font-weight: 600; color: var(--success); }
+.meter { flex: 1; max-width: 160px; height: 6px; border-radius: 3px; background: var(--border-strong); overflow: hidden; }
+.meter-fill { display: block; height: 100%; width: 0; background: var(--success); transition: width 60ms linear; }

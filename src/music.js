@@ -23,8 +23,47 @@ function seconds(label) {
   return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
-/** Primeiro vídeo "de verdade" (não live, não curtíssimo, não longo demais) para a busca. */
+/** ID do vídeo se o texto for um link do YouTube / YouTube Music / youtu.be. */
+export function videoIdFromUrl(text) {
+  const match = /https?:\/\/\S+/.exec(text || '');
+  if (!match) return null;
+  try {
+    const url = new URL(match[0].replace(/[)\].,;]+$/, ''));
+    if (url.hostname === 'youtu.be') return url.pathname.slice(1) || null;
+    if (/(^|\.)youtube\.com$/.test(url.hostname)) return url.searchParams.get('v');
+  } catch {
+    // link inválido
+  }
+  return null;
+}
+
+async function trackFromVideoId(videoId) {
+  let title = '';
+  let channel = '';
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`, {
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      title = data.title || '';
+      channel = data.author_name || '';
+    }
+  } catch {
+    // sem título: toca do mesmo jeito
+  }
+  return { videoId, title: title || 'Música escolhida', channel, url: `https://www.youtube.com/watch?v=${videoId}`, alternatives: [] };
+}
+
+/**
+ * Resolve o que a pessoa pediu: um link do YouTube toca exatamente aquele vídeo; texto é
+ * buscado, preferindo a versão "Topic" (áudio oficial da música, a que o YouTube Music usa)
+ * e depois o primeiro vídeo "de verdade" (não live, não curtíssimo, não longo demais).
+ */
 export async function searchMusic(query) {
+  const linked = videoIdFromUrl(query);
+  if (linked) return trackFromVideoId(linked);
+
   const key = query.trim().toLowerCase();
   if (cache.has(key)) return cache.get(key);
 
@@ -60,9 +99,12 @@ export async function searchMusic(query) {
       const s = seconds(textOf(v.lengthText));
       return s !== null && s >= 60 && s <= 20 * 60;
     })
-    .slice(0, 6);
+    .slice(0, 8);
   if (!candidates.length && videos[0]) candidates.push(videos[0]);
   if (!candidates.length) return null;
+  // "Artista - Topic" são as faixas de áudio oficiais: sobem pro começo (mantendo a ordem entre elas).
+  const isTopic = (v) => /- Topic$/i.test(textOf(v.ownerText));
+  candidates.sort((a, b) => Number(isTopic(b)) - Number(isTopic(a)));
 
   const toTrack = (v) => ({
     videoId: v.videoId,

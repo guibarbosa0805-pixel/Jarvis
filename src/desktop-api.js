@@ -82,17 +82,21 @@ export function createDesktopRouter() {
     const person = req.person;
     try {
       const brain = getBrain(person);
-      const result = await brain.converse(text, undefined, { channel: 'desktop' });
+      const call = req.query.call === '1';
+      const result = await brain.converse(text, undefined, { channel: 'desktop', call });
       const body = { ...extra, text: result.text, actions: result.actions };
 
-      const wantVoice = result.voice || extra.spoken === true || req.query.voice === '1';
-      if (wantVoice && !hasLink(result.text) && result.text.length <= MAX_SPOKEN_CHARS) {
+      // Em chamada sempre fala (links saem da fala e ficam só no texto da tela).
+      const wantVoice = call || result.voice || extra.spoken === true || req.query.voice === '1';
+      if (wantVoice && (call || !hasLink(result.text)) && result.text.length <= MAX_SPOKEN_CHARS) {
         try {
           const ogg = await withTimeout(brain.speak(result.text), VOICE_TIMEOUT_MS);
           if (ogg) body.audio = ogg.toString('base64');
         } catch (err) {
           console.error(`${TAG} [${person.id}] Voz indisponível no app:`, err?.message || err);
         }
+        // O app usa uma voz local (se houver) ou avisa, em vez de ficar mudo.
+        if (!body.audio) body.voiceUnavailable = true;
       }
       delete body.spoken;
       res.json(body);

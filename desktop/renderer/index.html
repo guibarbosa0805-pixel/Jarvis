@@ -30,11 +30,19 @@
         <span id="status-dot" class="dot" title="Conexão com o servidor"></span>
         <span>Jarvis</span>
       </div>
-      <label class="toggle" title="O Jarvis responde em áudio quando a resposta for curta">
-        <input type="checkbox" id="voice-toggle">
-        <span>Respostas por voz</span>
-      </label>
+      <div class="header-actions">
+        <label class="toggle" title="O Jarvis responde em áudio quando a resposta for curta">
+          <input type="checkbox" id="voice-toggle">
+          <span>Respostas por voz</span>
+        </label>
+        <button id="call-btn" class="ghost call-btn" type="button" title="Conversa por voz, sem usar as mãos (Ctrl+Alt+J)">Ligar</button>
+      </div>
     </header>
+
+    <div id="call-bar" class="call-bar" hidden>
+      <span id="call-status" class="call-status">Ouvindo...</span>
+      <span class="meter" aria-hidden="true"><span id="call-level" class="meter-fill"></span></span>
+    </div>
 
     <div id="player" class="player" hidden>
       <div class="player-info">

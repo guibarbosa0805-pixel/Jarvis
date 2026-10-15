@@ -51,7 +51,7 @@ function createWindow() {
     icon: ICON,
     backgroundColor: '#0b0d11',
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   win.setMenu(null);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));

@@ -51,10 +51,15 @@ async function api(path, options = {}) {
   return body;
 }
 
+/** Toca a resposta falada; a promessa resolve quando termina (ou falha). */
 function playVoice(base64) {
   currentAudio?.pause();
-  currentAudio = new Audio(`data:audio/ogg;base64,${base64}`);
-  currentAudio.play().catch(() => {});
+  const audio = new Audio(`data:audio/ogg;base64,${base64}`);
+  currentAudio = audio;
+  return new Promise((resolve) => {
+    audio.onended = audio.onerror = audio.onpause = () => resolve();
+    audio.play().catch(() => resolve());
+  });
 }
 
 function setBusy(on) {
@@ -131,7 +136,33 @@ async function handleReply(body) {
   if (body.transcript) addMessage(body.transcript, 'user');
   addMessage(body.text, 'jarvis');
   if (body.actions?.length) window.jarvis.runActions(body.actions);
-  if (body.audio) playVoice(body.audio);
+  if (body.audio) {
+    const playing = playVoice(body.audio);
+    if (call) await playing;
+  } else if (body.voiceUnavailable) {
+    await speakLocally(body.text);
+  }
+}
+
+let warnedVoice = false;
+
+/** Plano B quando a voz natural do servidor não está disponível (cota diária): voz pt-BR do Windows, se instalada. */
+async function speakLocally(text) {
+  const voice = speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith('pt'));
+  if (!voice) {
+    if (!warnedVoice) {
+      warnedVoice = true;
+      addMessage('A voz natural do Jarvis atingiu o limite diário e este computador não tem voz em português instalada. Respondo por texto até a cota voltar (ou instale a voz Maria em Configurações do Windows > Hora e idioma > Fala).', 'system');
+    }
+    return;
+  }
+  const speech = new SpeechSynthesisUtterance(text.replace(/https?:\/\/\S+/g, '').replace(/[*_~`#>]/g, ''));
+  speech.voice = voice;
+  speech.lang = voice.lang;
+  await new Promise((resolve) => {
+    speech.onend = speech.onerror = () => resolve();
+    speechSynthesis.speak(speech);
+  });
 }
 
 async function sendText(text) {
@@ -229,8 +260,9 @@ async function sendAudio(blob) {
 }
 
 $('mic').addEventListener('click', toggleRecording);
+// Ctrl+Alt+J liga/desliga a chamada de voz.
 window.jarvis.on('toggle-record', () => {
-  if (!$('chat').hidden) toggleRecording();
+  if (!$('chat').hidden) toggleCall();
 });
 
 // ---------- Música ----------
@@ -302,3 +334,155 @@ $('voice-toggle').addEventListener('change', () => {
   if (config.paired) showChat();
   else showSetup();
 })();
+
+// ---------- Chamada de voz (conversa sem usar as mãos) ----------
+// Escuta o microfone, detecta quando você começa e termina de falar (por volume),
+// manda o trecho pro Jarvis e toca a resposta falada; depois volta a escutar.
+
+const CALL = { minVoiceMs: 350, silenceMs: 1300, maxUtteranceMs: 30000, tickMs: 50 };
+let call = null;
+
+function setCallStatus(text) {
+  $('call-status').textContent = text;
+}
+
+function beep(freq, ms) {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    gain.gain.value = 0.06;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    setTimeout(() => { osc.stop(); ctx.close(); }, ms);
+  } catch {
+    // som é só um detalhe
+  }
+}
+
+async function startCall() {
+  if (call || busy) return;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch {
+    addMessage('Não consegui acessar o microfone. Verifique a permissão do Windows para aplicativos.', 'system error');
+    return;
+  }
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+
+  call = { stream, ctx, analyser, state: 'listening', floor: 0.01, loud: 0, recorder: null, chunks: [], startedAt: 0, lastVoiceAt: 0, voicedMs: 0 };
+  call.timer = setInterval(callTick, CALL.tickMs);
+  currentAudio?.pause();
+  $('call-bar').hidden = false;
+  $('call-btn').textContent = 'Desligar';
+  $('call-btn').classList.add('on');
+  setCallStatus('Ouvindo...');
+  beep(880, 120);
+}
+
+function endCall() {
+  if (!call) return;
+  const finished = call;
+  call = null;
+  clearInterval(finished.timer);
+  if (finished.recorder?.state === 'recording') {
+    finished.recorder.onstop = null;
+    finished.recorder.stop();
+  }
+  finished.stream.getTracks().forEach((t) => t.stop());
+  finished.ctx.close().catch(() => {});
+  currentAudio?.pause();
+  $('call-bar').hidden = true;
+  $('call-btn').textContent = 'Ligar';
+  $('call-btn').classList.remove('on');
+  $('call-level').style.width = '0';
+  beep(520, 150);
+}
+
+function toggleCall() {
+  if (call) endCall();
+  else startCall();
+}
+
+function callTick() {
+  if (!call) return;
+  const data = new Float32Array(call.analyser.fftSize);
+  call.analyser.getFloatTimeDomainData(data);
+  let sum = 0;
+  for (const v of data) sum += v * v;
+  const rms = Math.sqrt(sum / data.length);
+  $('call-level').style.width = `${Math.min(100, rms * 600)}%`;
+
+  const now = performance.now();
+  const threshold = Math.max(0.025, call.floor * 3);
+  const voiced = rms > threshold;
+
+  if (call.state === 'listening') {
+    call.floor = call.floor * 0.97 + rms * 0.03;
+    call.loud = voiced ? call.loud + 1 : 0;
+    if (call.loud >= 3) startUtterance(now);
+  } else if (call.state === 'recording') {
+    if (voiced) {
+      call.lastVoiceAt = now;
+      call.voicedMs += CALL.tickMs;
+    }
+    if (now - call.lastVoiceAt > CALL.silenceMs || now - call.startedAt > CALL.maxUtteranceMs) finishUtterance();
+  }
+}
+
+function startUtterance(now) {
+  call.state = 'recording';
+  call.startedAt = now;
+  call.lastVoiceAt = now;
+  call.voicedMs = CALL.tickMs * call.loud;
+  call.chunks = [];
+  const recorder = new MediaRecorder(call.stream, { mimeType: 'audio/webm;codecs=opus' });
+  recorder.ondataavailable = (e) => e.data.size && call?.chunks.push(e.data);
+  recorder.onstop = onUtteranceEnd;
+  recorder.start();
+  call.recorder = recorder;
+  setCallStatus('Ouvindo você...');
+}
+
+function finishUtterance() {
+  if (call?.recorder?.state === 'recording') call.recorder.stop();
+  call.state = 'processing';
+}
+
+async function onUtteranceEnd() {
+  if (!call) return;
+  const active = call;
+  const blob = new Blob(active.chunks, { type: 'audio/webm' });
+  if (active.voicedMs < CALL.minVoiceMs || blob.size < 2000) {
+    resumeListening();
+    return;
+  }
+  setCallStatus('Pensando...');
+  setBusy(true);
+  try {
+    const body = await api('/audio?call=1', { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: blob });
+    if (!call) return;
+    setCallStatus('Falando...');
+    await handleReply(body);
+  } catch (err) {
+    if (err.message !== 'unauthorized') addMessage(err.message === 'Failed to fetch' ? 'Sem conexão com o servidor.' : err.message, 'system error');
+  } finally {
+    setBusy(false);
+    resumeListening();
+  }
+}
+
+function resumeListening() {
+  if (!call) return;
+  call.state = 'listening';
+  call.loud = 0;
+  call.recorder = null;
+  setCallStatus('Ouvindo...');
+}
+
+$('call-btn').addEventListener('click', toggleCall);
