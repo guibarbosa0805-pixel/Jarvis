@@ -102,7 +102,8 @@ function normalizeSpeech(text) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\b(?:[jgc]h?[aeiouy]r[vbw][a-z]{1,3}|j[ae]vi[sz])\b/g, 'jarvis')
+    // Erros comuns de transcrição do nome: Jarbas, Jervis, Javis, Jabes, Jarvi...
+    .replace(/\b(?:[jgc]h?[aeiouy]r[vbw][a-z]{1,3}|j[ae][bv][ei][sz]|j[ae]rvi)\b/g, 'jarvis')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
