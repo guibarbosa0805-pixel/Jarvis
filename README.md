@@ -6,6 +6,8 @@ Roda como **múltiplas instâncias independentes na mesma máquina**: cada pesso
 
 > Isso usa uma biblioteca não-oficial que automatiza o WhatsApp Web. Não é a API oficial do WhatsApp Business. Use por sua conta e risco (é o método padrão para bots pessoais, mas tecnicamente viola os termos de uso do WhatsApp — risco baixo pra uso pessoal moderado, mas existe).
 >
+> **Memória:** o Jarvis lembra de cada pessoa entre conversas — perfil (cidade, temas, preferências) e o histórico recente da conversa ficam em `data/memory/<pessoa>.json`, em texto puro, nessa máquina. A pessoa pode pedir "apague o que você sabe sobre mim" e tudo isso é apagado (as tarefas continuam). Imagens e áudios não são guardados.
+>
 > **Transparência pra quem for conectar o celular:** as mensagens de cada pessoa passam pela chave de Gemini de quem administra a máquina (consumo/billing aparece pra ela) e ficam salvas em texto puro no disco dessa máquina (`data/<instância>.json`). Só conecte gente que tope isso.
 
 ## 1. Pré-requisitos

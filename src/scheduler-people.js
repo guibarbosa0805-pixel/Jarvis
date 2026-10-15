@@ -3,9 +3,9 @@ import { listPeople, updatePerson } from './people.js';
 import { createStore } from './store.js';
 import { formatDateShort, formatTime, formatDateTimeFull } from './format.js';
 import { sendToPerson } from './jarvis.js';
+import { groupAgenda } from './agenda.js';
 
 const TAG = '[jarvis]';
-const DAY_MS = 86400000;
 const DIGEST_WINDOW_MIN = 180;
 const LIST_CAP = 5;
 
@@ -19,15 +19,7 @@ function dateKey(d) {
 }
 
 export function buildDigest(person, store, now = new Date()) {
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startTomorrow = new Date(startToday.getTime() + DAY_MS);
-  const startAfterWeek = new Date(startToday.getTime() + 8 * DAY_MS);
-
-  const pending = store.listPending().filter((t) => t.dueAt);
-  const at = (t) => new Date(t.dueAt);
-  const today = pending.filter((t) => at(t) >= startToday && at(t) < startTomorrow);
-  const overdue = pending.filter((t) => at(t) < startToday);
-  const upcoming = pending.filter((t) => at(t) >= startTomorrow && at(t) < startAfterWeek);
+  const { today, overdue, upcoming } = groupAgenda(store, now);
 
   const withDate = (t) => `📅 ${formatDateShort(t.dueAt)} ${formatTime(t.dueAt)} - ${t.title}`;
   const lines = [`Oii ${person.displayName} 😊, tudo bem?`, ''];

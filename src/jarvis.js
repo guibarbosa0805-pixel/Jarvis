@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { writeStatus } from './status.js';
 import { createStore } from './store.js';
 import { createBrain } from './gemini.js';
+import { createMemory } from './memory.js';
 import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, updatePerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -62,6 +63,7 @@ function getBrain(person) {
         model: person.geminiModel,
         displayName: person.displayName,
         store: createStore(person.id),
+        memory: createMemory(person.id),
         channelLabel: 'no WhatsApp',
       }),
     );
@@ -92,9 +94,16 @@ function errorNotice(err, what) {
   return what ? `Deu um erro ao processar ${what} 🙃 tenta de novo.` : 'Deu um erro aqui do meu lado 🙃 tenta de novo.';
 }
 
+// WhatsApp usa *um asterisco* pra negrito e não tem títulos: converte o markdown
+// que o modelo às vezes escreve (**negrito**, # título).
+export function toWhatsappMarkdown(text) {
+  return text.replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^#{1,6}\s+/gm, '');
+}
+
 export async function sendToPerson(jid, text) {
   if (!sock) throw new Error('Jarvis não está conectado.');
-  return sock.sendMessage(jid, { text: `${JARVIS_LABEL} ${text}` });
+  const whatsappText = toWhatsappMarkdown(text);
+  return sock.sendMessage(jid, { text: `${JARVIS_LABEL} ${whatsappText}` });
 }
 
 /** Encerra a conexão atual (usado antes de reparear). Não falha se já estiver parada. */
