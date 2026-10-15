@@ -77,7 +77,7 @@ function friendly(err) {
 
 const STATE_LABELS = {
   off: 'Escuta pausada. Toque no círculo para ouvir',
-  listening: () => (inConversation() ? 'Pode falar' : 'Ouvindo. Diga "Jarvis"'),
+  listening: () => (inConversation() || document.hasFocus() ? 'Pode falar, estou ouvindo' : 'Ouvindo. Diga "Jarvis"'),
   recording: 'Ouvindo você...',
   thinking: 'Pensando...',
   speaking: 'Falando...',
@@ -340,7 +340,7 @@ async function loadHistory() {
   $('messages').replaceChildren();
   for (const m of history) addMessage(m.text, m.role === 'user' ? 'user' : 'jarvis');
   if (!history.length) {
-    addMessage(`Olá${config.name ? `, ${config.name}` : ''}. Estou ouvindo: é só dizer "Jarvis". Pelo WhatsApp eu continuo à disposição, é a mesma conversa.`, 'system');
+    addMessage(`Olá${config.name ? `, ${config.name}` : ''}. Estou ouvindo: com esta janela aberta é só falar; minimizado, me chame de "Jarvis". Pelo WhatsApp eu continuo à disposição, é a mesma conversa.`, 'system');
   }
 }
 
@@ -557,10 +557,17 @@ async function onUtteranceEnd(samples, rate) {
   setOrb('thinking');
   setBusy(true);
   try {
-    const params = [`call=1`, `wake=${inConversation() ? 0 : 1}`];
+    // Com a janela em foco a pessoa está falando com o app: não precisa dizer "Jarvis".
+    // Em segundo plano (escondido na bandeja ou atrás de outras janelas), só responde se chamarem.
+    const needsWakeWord = !inConversation() && !document.hasFocus();
+    const params = [`call=1`, `wake=${needsWakeWord ? 1 : 0}`];
     if (!voiceOn) params.push('voice=0');
     const body = await api(`/audio?${params.join('&')}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob });
-    if (!body.ignored) await handleReply(body); // ignorado: conversa ao fundo ou música, sem "Jarvis"
+    if (!body.ignored) await handleReply(body);
+    else if (body.transcript && document.visibilityState === 'visible') {
+      // Descartado por não ter "Jarvis": mostra o que ouviu, pra não parecer travado.
+      addMessage(`Ouvi "${body.transcript}". Diga "Jarvis" antes do pedido para eu responder.`, 'system');
+    }
   } catch (err) {
     if (err.message !== 'unauthorized') addMessage(friendly(err), 'system error');
   } finally {
@@ -579,6 +586,12 @@ function resumeListening() {
 }
 
 $('orb-btn').addEventListener('click', toggleCall);
+// O texto do estado muda com o foco da janela (com foco não precisa dizer "Jarvis").
+for (const evt of ['focus', 'blur']) {
+  window.addEventListener(evt, () => {
+    if ($('orb').dataset.state === 'listening') setOrb('listening');
+  });
+}
 window.jarvis.on('toggle-record', () => {
   if (!$('chat').hidden) toggleCall();
 });

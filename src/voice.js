@@ -102,7 +102,7 @@ function normalizeSpeech(text) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\b[jgc][aeiouy]r[vw][a-z]{1,3}\b/g, 'jarvis')
+    .replace(/\b(?:[jgc]h?[aeiouy]r[vbw][a-z]{1,3}|j[ae]vi[sz])\b/g, 'jarvis')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
