@@ -25,6 +25,35 @@ export function speakableText(text) {
     .trim();
 }
 
+/** Texto falável cortado no fim de uma frase, pra respostas longas não serem cortadas no meio. */
+export function spokenExcerpt(text, max = MAX_SPOKEN_CHARS) {
+  const clean = speakableText(text);
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end > max / 2 ? cut.slice(0, end + 1) : cut;
+}
+
+/** PCM cru do TTS (audio/L16;rate=24000) ganha cabeçalho WAV; WAV já pronto passa direto. */
+export function toWav(buffer, mimeType = '') {
+  if (!/L16|pcm/i.test(mimeType)) return buffer;
+  const rate = Number(/rate=(\d+)/i.exec(mimeType)?.[1] ?? 24000);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + buffer.length, 4);
+  header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(buffer.length, 40);
+  return Buffer.concat([header, buffer]);
+}
+
 /**
  * Áudio do Gemini TTS -> OGG/Opus, o formato dos áudios de voz do WhatsApp.
  * Se vier PCM cru (audio/L16;rate=24000) o ffmpeg precisa saber o formato; WAV é autodetectado.

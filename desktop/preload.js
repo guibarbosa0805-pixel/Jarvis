@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   disconnect: () => ipcRenderer.invoke('config:disconnect'),
   runActions: (actions) => ipcRenderer.invoke('actions:run', actions),
   musicControl: (action) => ipcRenderer.invoke('music:control', action),
+  duckMusic: (on) => ipcRenderer.invoke('music:duck', on),
   showPlayer: () => ipcRenderer.invoke('music:show'),
   on: (channel, callback) => {
     if (EVENTS.includes(channel)) ipcRenderer.on(channel, (_e, payload) => callback(payload));

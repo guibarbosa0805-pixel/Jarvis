@@ -3,7 +3,7 @@ import * as defaultStore from './store.js';
 import { leadOffsets } from './store.js';
 import { formatDateShort, formatTime } from './format.js';
 import { buildBriefingData } from './briefing.js';
-import { speakableText, wavToOggOpus, isGreeting, MAX_SPOKEN_CHARS } from './voice.js';
+import { wavToOggOpus, isGreeting, spokenExcerpt, toWav } from './voice.js';
 import { searchMusic, searchLinks } from './music.js';
 import { createPairingCode, isDesktopOnline, pushToDesktop } from './desktop.js';
 import { findPersonById, updatePerson } from './people.js';
@@ -12,6 +12,9 @@ import { findPersonById, updatePerson } from './people.js';
 // Modelos de voz em ordem de preferência; o dia em que cada um esgotou a cota (pra não insistir).
 const ttsModels = () => (process.env.GEMINI_TTS_MODEL || 'gemini-3.8-flash-lite-tts,gemini-3.8-flash-tts').split(',').map((m) => m.trim()).filter(Boolean);
 const ttsExhausted = new Map();
+// Áudios já gerados (texto -> WAV), compartilhado entre pessoas; os mais antigos saem primeiro.
+const ttsCache = new Map();
+const TTS_CACHE_MAX = 60;
 
 const tools = [
   {
@@ -185,7 +188,7 @@ Seu papel:
 - Voz: você consegue responder em áudio. Se ${displayName} mandar um áudio, a resposta já vai por voz automaticamente; se pedir por texto pra você responder/falar em áudio, chame reply_with_voice. Em resposta por voz, escreva em frases curtas e naturais de fala, sem listas longas. Nunca diga que não consegue enviar áudio.
 - Rotina de bom dia: se ${displayName} pedir pra configurar o que acontece quando ela(e) manda "bom dia" (ex: responder por voz com uma frase e já tocar uma música), chame set_good_morning_routine com a frase (corrigida e bem pontuada) e a busca da música, e confirme. A música só toca se o app do Jarvis estiver aberto no computador; avise isso na confirmação. Depois de configurada, o "bom dia" sozinho dispara a rotina automaticamente.
 - Música: você toca músicas no computador da pessoa, quando o app do Jarvis está aberto lá. Se pedirem música, artista ou um som pra ambientar (ex: "toca AC/DC", "põe um som pra focar"), chame play_music com a busca e responda curto e com bom humor dizendo o que está tocando (use o "title" do resultado). Para pausar, continuar, parar ou mudar o volume, use control_music. Se o resultado de play_music vier com playing_on null (nenhum PC conectado), explique que o app precisa estar aberto no computador e mande o "url" pra pessoa abrir. Se falhar, ofereça os links de busca (search_links).
-- App do computador: se ${displayName} pedir pra usar/conectar o Jarvis no PC ou computador (inclusive frases curtas como "conectar meu computador" ou "quero usar no PC" — aqui "conectar o computador" sempre significa o app do Jarvis, nunca TV, monitor ou rede), chame connect_desktop_app sem fazer perguntas e passe o código de 6 dígitos (vale pelo tempo indicado em expiresInMinutes), explicando que é só abrir o app do Jarvis no computador e digitar o código. Mensagens com "[Canal: chamada de voz no app do Jarvis]" são uma ligação: a pessoa fala com você e ouve a resposta (a transcrição pode ter erros de ouvido, então interprete com bom senso). Responda como numa ligação telefônica: de 1 a 3 frases curtas e naturais, sem listas, emojis, asteriscos, números de item ou links (se precisar de um link, diga que deixou escrito na tela e inclua o link no texto). Mensagens com "[Canal: app do Jarvis no computador]" vêm do app: lá não vale a formatação do WhatsApp (sem asteriscos), então responda em texto simples e curto.
+- App do computador: se ${displayName} pedir pra usar/conectar o Jarvis no PC ou computador (inclusive frases curtas como "conectar meu computador" ou "quero usar no PC" — aqui "conectar o computador" sempre significa o app do Jarvis, nunca TV, monitor ou rede), chame connect_desktop_app sem fazer perguntas e passe o código de 6 dígitos (vale pelo tempo indicado em expiresInMinutes), explicando que é só abrir o app do Jarvis no computador e digitar o código. Mensagens com "[Canal: chamada de voz no app do Jarvis]" são uma ligação: a pessoa fala com você e ouve a resposta (a transcrição pode ter erros de ouvido, então interprete com bom senso). Responda como numa ligação telefônica: de 1 a 3 frases curtas e naturais, sem listas, emojis, asteriscos, números de item ou links (se precisar de um link, diga que deixou escrito na tela e inclua o link no texto). Mensagens com "[Canal: app do Jarvis no computador]" vêm do app, que lê suas respostas em voz alta: responda em texto simples (sem asteriscos nem emojis), curto e natural de ouvir — no máximo 3 ou 4 frases; se for uma lista (ex: agenda), diga os itens em frases corridas.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
 Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
@@ -430,10 +433,17 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
   let queue = Promise.resolve();
 
   return {
-    /** Fala o texto com o Gemini TTS; devolve áudio OGG/Opus pronto pra mensagem de voz do WhatsApp. */
-    async speak(text) {
-      const spoken = speakableText(text).slice(0, MAX_SPOKEN_CHARS);
+    /**
+     * Fala o texto com o Gemini TTS e devolve WAV. Frases repetidas (ex: a do bom dia) saem
+     * do cache: instantâneas e sem gastar a cota diária da voz.
+     */
+    async synthesize(text) {
+      const spoken = spokenExcerpt(text);
       if (!spoken) return null;
+      const voiceName = process.env.JARVIS_VOICE || 'Charon';
+      const cacheKey = `${voiceName}|${spoken}`;
+      if (ttsCache.has(cacheKey)) return ttsCache.get(cacheKey);
+
       const today = new Date().toDateString();
       let lastError = null;
       // Cada modelo de voz tem cota diária própria no plano gratuito: usa o próximo quando um esgota.
@@ -445,12 +455,15 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
             contents: [{ parts: [{ text: spoken }] }],
             config: {
               responseModalities: ['AUDIO'],
-              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.JARVIS_VOICE || 'Charon' } } },
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
             },
           }));
           const inline = response.candidates?.[0]?.content?.parts?.find((p) => p.inlineData)?.inlineData;
           if (!inline?.data) throw new Error('TTS não devolveu áudio.');
-          return await wavToOggOpus(Buffer.from(inline.data, 'base64'), inline.mimeType);
+          const wav = toWav(Buffer.from(inline.data, 'base64'), inline.mimeType);
+          ttsCache.set(cacheKey, wav);
+          if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value);
+          return wav;
         } catch (err) {
           lastError = err;
           if (err?.status === 429 || /RESOURCE_EXHAUSTED|PerDay/i.test(String(err?.message))) ttsExhausted.set(model, today);
@@ -458,6 +471,12 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
         }
       }
       throw lastError || new Error('Cota diária da voz esgotada.');
+    },
+
+    /** Mesma fala em OGG/Opus, o formato das mensagens de voz do WhatsApp. */
+    async speak(text) {
+      const wav = await this.synthesize(text);
+      return wav ? wavToOggOpus(wav, 'audio/wav') : null;
     },
 
     /** Um turno de conversa: { text, voice (pediu resposta em áudio), actions (ações pro app do PC) }. */

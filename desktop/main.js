@@ -1,36 +1,49 @@
 const { app, BrowserWindow, Tray, Menu, Notification, globalShortcut, ipcMain, nativeImage, session, shell, safeStorage } = require('electron');
 const { readFileSync, writeFileSync, existsSync, mkdirSync } = require('node:fs');
 const path = require('node:path');
-const http = require('node:http');
 const { spawn, execFile } = require('node:child_process');
 
 const SHORTCUT = 'Control+Alt+J';
 const ICON = path.join(__dirname, 'assets', 'icon.png');
+const CONFIG_VERSION = 2;
+// O YouTube trata o Electron como navegador "não suportado"; o player se apresenta como Chrome.
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
-// ---------- Configuração (servidor + token do aparelho) ----------
+// ---------- Configuração (servidor + token do aparelho + preferências) ----------
 
 const configFile = () => path.join(app.getPath('userData'), 'config.json');
 
 function loadConfig() {
+  let raw = {};
   try {
-    const raw = JSON.parse(readFileSync(configFile(), 'utf8'));
-    let token = '';
-    if (raw.token) token = raw.encrypted ? safeStorage.decryptString(Buffer.from(raw.token, 'base64')) : raw.token;
-    return { server: raw.server || '', token, name: raw.name || '', musicTarget: raw.musicTarget || 'browser' };
+    raw = JSON.parse(readFileSync(configFile(), 'utf8'));
   } catch {
-    return { server: '', token: '', name: '', musicTarget: 'browser' };
+    // primeira execução
   }
+  let token = '';
+  try {
+    if (raw.token) token = raw.encrypted ? safeStorage.decryptString(Buffer.from(raw.token, 'base64')) : raw.token;
+  } catch {
+    token = '';
+  }
+  // Versões antigas abriam a música no navegador; agora o padrão é tocar dentro do app.
+  const musicTarget = (raw.version || 1) < CONFIG_VERSION ? 'app' : raw.musicTarget || 'app';
+  return { server: raw.server || '', token, name: raw.name || '', musicTarget, autoStartSet: !!raw.autoStartSet };
 }
 
-function saveConfig({ server, token, name, musicTarget }) {
+function saveConfig() {
   mkdirSync(app.getPath('userData'), { recursive: true });
   const encrypted = safeStorage.isEncryptionAvailable();
-  const stored = token ? (encrypted ? safeStorage.encryptString(token).toString('base64') : token) : '';
-  writeFileSync(configFile(), JSON.stringify({ server, name, token: stored, encrypted, musicTarget: musicTarget || 'browser' }), 'utf8');
+  const token = config.token ? (encrypted ? safeStorage.encryptString(config.token).toString('base64') : config.token) : '';
+  writeFileSync(
+    configFile(),
+    JSON.stringify({ version: CONFIG_VERSION, server: config.server, name: config.name, token, encrypted, musicTarget: config.musicTarget, autoStartSet: config.autoStartSet }),
+    'utf8',
+  );
 }
 
 let config = null;
@@ -43,21 +56,21 @@ let quitting = false;
 
 function createWindow(visible = true) {
   win = new BrowserWindow({
-    show: false,
-    width: 440,
-    height: 680,
-    minWidth: 360,
-    minHeight: 480,
+    show: visible,
+    width: 430,
+    height: 760,
+    minWidth: 380,
+    minHeight: 560,
     title: 'Jarvis',
     icon: ICON,
-    backgroundColor: '#0b0d11',
-    autoHideMenuBar: true,
+    backgroundColor: '#07090d',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#07090d', symbolColor: '#8b93a3', height: 40 },
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   win.setMenu(null);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Iniciado com o Windows a janela fica escondida na bandeja, mas carrega: o Jarvis já está ouvindo.
-  if (visible) win.once('ready-to-show', () => win.show());
   win.on('close', (e) => {
     if (quitting) return;
     e.preventDefault();
@@ -78,48 +91,49 @@ function showWindow() {
 function buildTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   tray.setToolTip('Jarvis');
-  const refresh = () =>
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Abrir Jarvis', click: showWindow },
-        { label: `Falar com o Jarvis (${SHORTCUT.replace('Control', 'Ctrl')})`, click: toggleRecording },
-        { type: 'separator' },
-        {
-          label: 'Iniciar com o Windows',
-          type: 'checkbox',
-          checked: app.getLoginItemSettings().openAtLogin,
-          click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
-        },
-        {
-          label: 'Tocar música',
-          submenu: musicTargets().map(([value, label]) => ({
-            label,
-            type: 'radio',
-            checked: config.musicTarget === value,
-            click: () => {
-              config.musicTarget = value;
-              saveConfig(config);
-            },
-          })),
-        },
-        { label: 'Desconectar este computador', click: disconnect },
-        { type: 'separator' },
-        { label: 'Sair', click: () => { quitting = true; app.quit(); } },
-      ]),
-    );
-  refresh();
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Abrir Jarvis', click: showWindow },
+      { label: `Ligar/desligar escuta (${SHORTCUT.replace('Control', 'Ctrl')})`, click: toggleListening },
+      { type: 'separator' },
+      {
+        label: 'Iniciar com o Windows',
+        type: 'checkbox',
+        checked: app.getLoginItemSettings().openAtLogin,
+        click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
+      },
+      {
+        label: 'Tocar música',
+        submenu: musicTargets().map(([value, label]) => ({
+          label,
+          type: 'radio',
+          checked: config.musicTarget === value,
+          click: () => {
+            config.musicTarget = value;
+            saveConfig();
+          },
+        })),
+      },
+      { label: 'Desconectar este computador', click: disconnect },
+      { type: 'separator' },
+      { label: 'Sair', click: () => { quitting = true; app.quit(); } },
+    ]),
+  );
   tray.on('click', showWindow);
 }
 
-function toggleRecording() {
-  showWindow();
-  win.webContents.send('toggle-record');
+function toggleListening() {
+  notifyRenderer('toggle-record');
 }
 
-// ---------- Onde a música toca ----------
-// Padrão: no navegador (YouTube Music), onde a pessoa já está logada: sem bloqueio de
-// gravadora, sem verificação de robô e com a conta Premium dela. A alternativa é a janela
-// de player do próprio Jarvis (mais controle, mas sujeita a esses bloqueios).
+function notifyRenderer(channel, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+// ---------- Música ----------
+// Padrão: toca dentro do app, em segundo plano (uma janela oculta com o YouTube). A janela
+// aparece só se o YouTube pedir verificação, ou quando a pessoa clica em "Player" (pra
+// entrar na conta e ficar sem anúncios). Alternativa: abrir no Brave/navegador.
 
 const BRAVE_PATHS = [
   path.join(process.env.ProgramFiles || '', 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'),
@@ -129,145 +143,79 @@ const BRAVE_PATHS = [
 const bravePath = () => BRAVE_PATHS.find((p) => existsSync(p)) || null;
 
 function musicTargets() {
-  const list = [['browser', 'No navegador padrão (YouTube Music)'], ['window', 'Na janela do Jarvis']];
-  if (bravePath()) list.unshift(['brave', 'No Brave (YouTube Music)']);
+  const list = [['app', 'Em segundo plano, no app'], ['browser', 'No navegador padrão (YouTube Music)']];
+  if (bravePath()) list.push(['brave', 'No Brave (YouTube Music)']);
   return list;
 }
 
-let lastBrowserTrack = null;
-
-function playOnTarget(action) {
-  const target = config.musicTarget;
-  if (target === 'window') return playMusic(action);
-  const url = `https://music.youtube.com/watch?v=${encodeURIComponent(action.videoId)}`;
-  const brave = target === 'brave' ? bravePath() : null;
-  if (brave) spawn(brave, [url], { detached: true, stdio: 'ignore' }).unref();
-  else shell.openExternal(url);
-  lastBrowserTrack = action.title;
-  notifyRenderer('now-playing', { title: action.title, paused: false });
-}
-
-// Teclas de mídia do Windows: controlam a aba do navegador que estiver tocando.
-const MEDIA_KEYS = { pause: 0xb3, resume: 0xb3, stop: 0xb2, volume_up: 0xaf, volume_down: 0xae };
-
-function pressMediaKey(vk, times = 1) {
-  const script =
-    "Add-Type -Namespace J -Name K -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte b, byte s, uint f, UIntPtr e);';" +
-    `1..${times} | ForEach-Object { [J.K]::keybd_event(${vk},0,0,[UIntPtr]::Zero); [J.K]::keybd_event(${vk},0,2,[UIntPtr]::Zero) }`;
-  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true }, () => {});
-}
-
-function controlOnTarget(action) {
-  if (config.musicTarget === 'window') return controlMusic(action);
-  const vk = MEDIA_KEYS[action];
-  if (!vk) return;
-  pressMediaKey(vk, action.startsWith('volume') ? 5 : 1);
-  if (action === 'pause') notifyRenderer('now-playing', { title: lastBrowserTrack, paused: true });
-  if (action === 'resume') notifyRenderer('now-playing', { title: lastBrowserTrack, paused: false });
-  if (action === 'stop') notifyRenderer('now-playing', null);
-}
-
-// ---------- Player de música (janela do Jarvis) ----------
-// Toca o vídeo do YouTube (player oficial incorporado) numa janelinha; o áudio sai dela.
-// Sessão persistente: se a pessoa entrar na conta do YouTube/Premium uma vez, fica sem anúncios.
-
 let player = null;
 let nowPlaying = null;
+let watchTimer = null;
 
-function notifyRenderer(channel, payload) {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+function setNowPlaying(info) {
+  nowPlaying = info;
+  notifyRenderer('now-playing', info);
 }
 
-// Servidor local mínimo que entrega o player.html (o YouTube só aceita embed vindo de uma página http).
-let playerServer = null;
-let playerOrigin = '';
-
-function ensurePlayerServer() {
-  if (playerServer) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const html = readFileSync(path.join(__dirname, 'player.html'));
-    playerServer = http.createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(html);
-    });
-    playerServer.once('error', reject);
-    playerServer.listen(0, '127.0.0.1', () => {
-      playerOrigin = `http://127.0.0.1:${playerServer.address().port}`;
-      resolve();
-    });
+function ensurePlayer() {
+  if (player && !player.isDestroyed()) return player;
+  player = new BrowserWindow({
+    width: 900,
+    height: 600,
+    title: 'Jarvis - Player',
+    icon: ICON,
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: 'persist:jarvis-player',
+      autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
   });
+  player.setMenu(null);
+  player.webContents.setUserAgent(CHROME_UA);
+  // Fechar o player pelo X só esconde: a música continua (parar é pelo app ou pela voz).
+  player.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    player.hide();
+  });
+  player.on('closed', () => {
+    player = null;
+  });
+  // Verificação de robô ou tela de consentimento: mostra a janela pra pessoa resolver uma vez.
+  player.webContents.on('did-navigate', (_e, url) => {
+    if (/google\.com\/sorry|consent\.(youtube|google)\.com|accounts\.google\.com/.test(url)) {
+      player.show();
+      notifyRenderer('notice', 'O YouTube pediu uma confirmação. Resolva na janela do player uma vez e a música continua.');
+    }
+  });
+  return player;
 }
 
-async function playMusic({ videoId, title, alternatives }) {
-  await ensurePlayerServer();
-  if (!player || player.isDestroyed()) {
-    player = new BrowserWindow({
-      width: 640,
-      height: 400,
-      title: 'Jarvis - Player',
-      icon: ICON,
-      autoHideMenuBar: true,
-      show: false,
-      webPreferences: { partition: 'persist:jarvis-player', autoplayPolicy: 'no-user-gesture-required', nodeIntegration: false, contextIsolation: true },
-    });
-    player.setMenu(null);
-    // Fechar a janela do player = parar a música.
-    player.on('closed', () => {
-      player = null;
-      nowPlaying = null;
-      notifyRenderer('now-playing', null);
-    });
-    player.once('ready-to-show', () => player?.showInactive());
-  }
-  const queue = [{ videoId, title }, ...(Array.isArray(alternatives) ? alternatives : [])].filter((t) => t?.videoId);
-  startTrack(queue, queue[0]);
+function playInApp({ videoId, title }) {
+  const p = ensurePlayer();
+  p.loadURL(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`);
+  setNowPlaying({ title, paused: false, source: 'app' });
+  clearInterval(watchTimer);
+  // Acompanha o vídeo: atualiza pausado/tocando e para no fim (sem emendar outros vídeos).
+  watchTimer = setInterval(async () => {
+    if (!player || player.isDestroyed() || nowPlaying?.source !== 'app') return clearInterval(watchTimer);
+    const state = await player.webContents
+      .executeJavaScript("(()=>{const v=document.querySelector('video.html5-main-video')||document.querySelector('video');const ad=!!document.querySelector('.ad-showing');return v?{paused:v.paused,ended:v.ended,ad}:null})()")
+      .catch(() => null);
+    if (!state) return;
+    if (state.ended && !state.ad) return stopMusic();
+    if (state.paused !== nowPlaying.paused) setNowPlaying({ ...nowPlaying, paused: state.paused });
+  }, 3000);
 }
 
-/** Toca a faixa; se o YouTube recusar o embed, tenta a próxima da fila, e por fim abre no navegador. */
-function startTrack(queue, track) {
-  nowPlaying = { ...track, queue, first: queue[0] };
-  player.loadURL(`${playerOrigin}/?v=${encodeURIComponent(track.videoId)}`);
-  notifyRenderer('now-playing', { title: track.title, paused: false });
-  checkPlayback(track.videoId, 0);
-}
-
-const PLAYING = 1;
-
-async function checkPlayback(videoId, attempt) {
-  if (!player || player.isDestroyed() || nowPlaying?.videoId !== videoId) return;
-  let info = null;
-  try {
-    info = await player.webContents.executeJavaScript('window.ctl && window.ctl.state()');
-  } catch {
-    // página ainda carregando
-  }
-  if (process.env.JARVIS_DEBUG) console.log('player', videoId, attempt, JSON.stringify(info));
-  if (info?.state === PLAYING) return;
-  if (info?.error || attempt >= 8) return tryNext();
-  setTimeout(() => checkPlayback(videoId, attempt + 1), 2000);
-}
-
-const MAX_EMBED_TRIES = 3;
-
-function tryNext() {
-  const { queue, videoId, first } = nowPlaying;
-  const index = queue.findIndex((t) => t.videoId === videoId);
-  if (index + 1 < Math.min(queue.length, MAX_EMBED_TRIES)) return startTrack(queue, queue[index + 1]);
-  openWatchPage(first);
-}
-
-/**
- * Gravadoras costumam bloquear o player incorporado. Aí abre a página normal do YouTube na
- * própria janela do player: se ele pedir verificação ou login (comum em rede de empresa),
- * a pessoa resolve uma vez ali e a sessão fica salva pras próximas músicas.
- */
-function openWatchPage(track) {
-  if (!player || player.isDestroyed()) return;
-  nowPlaying = { ...track, queue: [track], first: track, watch: true };
-  player.loadURL(`https://www.youtube.com/watch?v=${encodeURIComponent(track.videoId)}`);
-  player.show();
-  notifyRenderer('now-playing', { title: track.title, paused: false });
-  notifyRenderer('notice', 'Essa música não toca no player incorporado, então abri o YouTube na janela do player. Se ele pedir verificação ou login, faça uma vez ali e a música continua.');
+function stopMusic() {
+  clearInterval(watchTimer);
+  if (player && !player.isDestroyed()) player.webContents.loadURL('about:blank');
+  setNowPlaying(null);
 }
 
 async function runInPlayer(code) {
@@ -280,30 +228,65 @@ async function runInPlayer(code) {
   }
 }
 
+const VIDEO = "(document.querySelector('video.html5-main-video')||document.querySelector('video'))";
+
+// Teclas de mídia do Windows: controlam a aba do navegador quando a música toca fora do app.
+const MEDIA_KEYS = { pause: 0xb3, resume: 0xb3, stop: 0xb2, volume_up: 0xaf, volume_down: 0xae };
+
+function pressMediaKey(vk, times = 1) {
+  const script =
+    "Add-Type -Namespace J -Name K -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte b, byte s, uint f, UIntPtr e);';" +
+    `1..${times} | ForEach-Object { [J.K]::keybd_event(${vk},0,0,[UIntPtr]::Zero); [J.K]::keybd_event(${vk},0,2,[UIntPtr]::Zero) }`;
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true }, () => {});
+}
+
+function playMusic(action) {
+  if (config.musicTarget === 'app') return playInApp(action);
+  stopMusic();
+  const url = `https://music.youtube.com/watch?v=${encodeURIComponent(action.videoId)}`;
+  const brave = config.musicTarget === 'brave' ? bravePath() : null;
+  if (brave) spawn(brave, [url], { detached: true, stdio: 'ignore' }).unref();
+  else shell.openExternal(url);
+  setNowPlaying({ title: action.title, paused: false, source: 'browser' });
+}
+
 async function controlMusic(action) {
+  if (nowPlaying?.source === 'browser') {
+    const vk = MEDIA_KEYS[action];
+    if (vk) pressMediaKey(vk, action.startsWith('volume') ? 5 : 1);
+    if (action === 'stop') setNowPlaying(null);
+    else if (action === 'pause' || action === 'resume') setNowPlaying({ ...nowPlaying, paused: action === 'pause' });
+    return;
+  }
   switch (action) {
     case 'pause':
-      if (await runInPlayer("window.ctl ? window.ctl.pause() : document.querySelector('video')?.pause()")) notifyRenderer('now-playing', { ...nowPlaying, paused: true });
+      if (await runInPlayer(`${VIDEO}?.pause()`)) setNowPlaying({ ...nowPlaying, paused: true });
       break;
     case 'resume':
-      if (await runInPlayer("window.ctl ? window.ctl.play() : document.querySelector('video')?.play()")) notifyRenderer('now-playing', { ...nowPlaying, paused: false });
+      if (await runInPlayer(`${VIDEO}?.play()`)) setNowPlaying({ ...nowPlaying, paused: false });
       break;
     case 'stop':
-      if (player && !player.isDestroyed()) player.close();
+      stopMusic();
       break;
     case 'volume_up':
-      await runInPlayer("window.ctl ? window.ctl.volume(20) : (()=>{const v=document.querySelector('video'); if(v) v.volume=Math.min(1,v.volume+0.2)})()");
+      await runInPlayer(`(()=>{const v=${VIDEO}; if(v) v.volume=Math.min(1,v.volume+0.2)})()`);
       break;
     case 'volume_down':
-      await runInPlayer("window.ctl ? window.ctl.volume(-20) : (()=>{const v=document.querySelector('video'); if(v) v.volume=Math.max(0,v.volume-0.2)})()");
+      await runInPlayer(`(()=>{const v=${VIDEO}; if(v) v.volume=Math.max(0,v.volume-0.2)})()`);
       break;
   }
 }
 
+/** Abaixa a música enquanto o Jarvis fala ou ouve, e devolve o volume depois. */
+async function duckMusic(on) {
+  if (nowPlaying?.source !== 'app') return;
+  await runInPlayer(`(()=>{const v=${VIDEO}; if(!v) return; if(${on}){ if(window.__jv==null) window.__jv=v.volume; v.volume=Math.min(v.volume,0.15);} else if(window.__jv!=null){ v.volume=window.__jv; window.__jv=null; }})()`);
+}
+
 function handleAction(action) {
   if (!action || typeof action !== 'object') return;
-  if (action.type === 'play_music' && action.videoId) playOnTarget(action);
-  else if (action.type === 'control_music') controlOnTarget(action.action);
+  if (action.type === 'play_music' && action.videoId) playMusic(action);
+  else if (action.type === 'control_music') controlMusic(action.action);
   else if (action.type === 'chat') notifyRenderer('chat', { user: action.user, reply: action.reply });
   else if (action.type === 'notify') {
     new Notification({ title: action.title || 'Jarvis', body: action.body || '', icon: ICON }).show();
@@ -314,7 +297,6 @@ function handleAction(action) {
 
 let eventsAbort = null;
 let retryTimer = null;
-
 let connectionStatus = 'offline';
 
 function setStatus(status) {
@@ -358,7 +340,7 @@ async function connectEvents() {
         }
       }
     }
-  } catch (err) {
+  } catch {
     if (abort.signal.aborted) return;
   }
   if (abort.signal.aborted) return;
@@ -369,9 +351,10 @@ async function connectEvents() {
 function disconnect() {
   eventsAbort?.abort();
   clearTimeout(retryTimer);
-  config = { server: config?.server || '', token: '', name: '', musicTarget: config?.musicTarget };
-  saveConfig(config);
-  controlOnTarget('stop');
+  config.token = '';
+  config.name = '';
+  saveConfig();
+  controlMusic('stop');
   showWindow();
   notifyRenderer('config', publicConfig());
 }
@@ -383,8 +366,10 @@ const publicConfig = () => ({ server: config.server, name: config.name, paired: 
 ipcMain.handle('config:get', () => ({ ...publicConfig(), token: config.token, shortcut: SHORTCUT.replace('Control', 'Ctrl'), status: connectionStatus, nowPlaying }));
 
 ipcMain.handle('config:save', (_e, next) => {
-  config = { server: String(next.server || '').replace(/\/+$/, ''), token: String(next.token || ''), name: String(next.name || ''), musicTarget: config.musicTarget };
-  saveConfig(config);
+  config.server = String(next.server || '').replace(/\/+$/, '');
+  config.token = String(next.token || '');
+  config.name = String(next.name || '');
+  saveConfig();
   connectEvents();
   return publicConfig();
 });
@@ -393,9 +378,10 @@ ipcMain.handle('config:disconnect', () => disconnect());
 ipcMain.handle('actions:run', (_e, actions) => {
   for (const a of Array.isArray(actions) ? actions : []) handleAction(a);
 });
-ipcMain.handle('music:control', (_e, action) => controlOnTarget(action));
+ipcMain.handle('music:control', (_e, action) => controlMusic(action));
+ipcMain.handle('music:duck', (_e, on) => duckMusic(!!on));
 ipcMain.handle('music:show', () => {
-  if (player && !player.isDestroyed()) {
+  if (nowPlaying?.source === 'app' && player && !player.isDestroyed()) {
     player.show();
     player.focus();
   }
@@ -408,12 +394,19 @@ app.on('second-instance', showWindow);
 app.whenReady().then(() => {
   config = loadConfig();
 
-  // Microfone liberado só pra nossa própria janela.
+  // Na primeira execução do app instalado, já liga "Iniciar com o Windows" (dá pra desligar na bandeja).
+  if (app.isPackaged && !config.autoStartSet) {
+    app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] });
+    config.autoStartSet = true;
+  }
+  saveConfig();
+
+  // Microfone e notificações liberados só pra nossa própria janela.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media' || permission === 'notifications'));
 
   buildTray();
   createWindow(!(process.argv.includes('--hidden') && config.token));
-  globalShortcut.register(SHORTCUT, toggleRecording);
+  globalShortcut.register(SHORTCUT, toggleListening);
   connectEvents();
 });
 
@@ -422,5 +415,5 @@ app.on('before-quit', () => {
   quitting = true;
 });
 app.on('window-all-closed', () => {
-  // Continua na bandeja (SSE + música).
+  // Continua na bandeja (eventos do servidor + música).
 });

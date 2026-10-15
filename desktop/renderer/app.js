@@ -1,11 +1,29 @@
 const $ = (id) => document.getElementById(id);
 
+const DEFAULT_SERVER = 'http://192.168.3.122:4545';
+
 let config = { server: '', token: '', name: '', paired: false, shortcut: 'Ctrl+Alt+J' };
 let busy = false;
-let recorder = null;
 let currentAudio = null;
+let voiceOn = readPref('voice', '1') === '1';
 
 // ---------- Utilidades ----------
+
+function readPref(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writePref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // preferência é só conveniência
+  }
+}
 
 const URL_RE = /(https?:\/\/[^\s]+)/g;
 
@@ -31,7 +49,7 @@ function addMessage(text, kind = 'jarvis') {
 }
 
 function normalizeServer(value) {
-  let v = value.trim().replace(/\/+$/, '');
+  let v = String(value || '').trim().replace(/\/+$/, '');
   if (!v) return '';
   if (!/^https?:\/\//i.test(v)) v = `http://${v}`;
   return v;
@@ -44,38 +62,240 @@ async function api(path, options = {}) {
   });
   const body = await res.json().catch(() => ({}));
   if (res.status === 401) {
-    showSetup('Este computador foi desconectado. Peça um novo código ao Jarvis.');
+    showSetup('Este computador foi desconectado. Conecte de novo pelo WhatsApp.');
     throw new Error('unauthorized');
   }
   if (!res.ok) throw new Error(body.error || `Erro ${res.status}`);
   return body;
 }
 
-/** Toca a resposta falada; a promessa resolve quando termina (ou falha). */
-function playVoice(base64) {
+function friendly(err) {
+  return err.message === 'Failed to fetch' ? 'Sem conexão com o servidor. Tentando de novo...' : err.message;
+}
+
+// ---------- Orb: o estado da voz num relance ----------
+
+const STATE_LABELS = {
+  off: 'Escuta pausada. Toque no círculo para ouvir',
+  listening: () => (inConversation() ? 'Pode falar' : 'Ouvindo. Diga "Jarvis"'),
+  recording: 'Ouvindo você...',
+  thinking: 'Pensando...',
+  speaking: 'Falando...',
+};
+
+function setOrb(state) {
+  $('orb').dataset.state = state;
+  const label = STATE_LABELS[state];
+  $('state-label').textContent = typeof label === 'function' ? label() : label;
+  $('state-label').classList.toggle('active', state !== 'off' && state !== 'listening');
+  if (state !== 'listening' && state !== 'recording') $('orb').style.setProperty('--level', 0);
+}
+
+/** Estado "de repouso": ouvindo se a escuta estiver ligada, senão pausado. */
+function restOrb() {
+  setOrb(call ? 'listening' : 'off');
+}
+
+// ---------- Voz ----------
+
+function playBlob(blob) {
   currentAudio?.pause();
-  const audio = new Audio(`data:audio/ogg;base64,${base64}`);
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
   currentAudio = audio;
   return new Promise((resolve) => {
-    audio.onended = audio.onerror = audio.onpause = () => resolve();
-    audio.play().catch(() => resolve());
+    const done = () => {
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    audio.onended = audio.onerror = audio.onpause = done;
+    audio.play().catch(done);
   });
 }
 
-function setBusy(on) {
-  busy = on;
-  $('send').disabled = on;
+let warnedVoice = false;
+
+/** Plano B quando a voz do servidor não está disponível (cota diária): voz pt-BR do Windows, se houver. */
+async function speakLocally(text) {
+  const voice = speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith('pt'));
+  if (!voice) {
+    if (!warnedVoice) {
+      warnedVoice = true;
+      addMessage('A voz do Jarvis atingiu o limite de hoje. Sigo respondendo por texto até ela voltar.', 'system');
+    }
+    return;
+  }
+  const speech = new SpeechSynthesisUtterance(text.replace(URL_RE, '').replace(/[*_~`#>]/g, ''));
+  speech.voice = voice;
+  speech.lang = voice.lang;
+  await new Promise((resolve) => {
+    speech.onend = speech.onerror = () => resolve();
+    speechSynthesis.speak(speech);
+  });
 }
+
+async function fetchSpeech(id) {
+  const res = await fetch(`${config.server}/api/desktop/speech/${id}`, { headers: { Authorization: `Bearer ${config.token}` } });
+  if (!res.ok) return null;
+  return res.blob();
+}
+
+/**
+ * Mostra a resposta na hora e fala em seguida (o áudio é gerado em paralelo no servidor).
+ * Ações como tocar música só começam depois que o Jarvis termina de falar.
+ */
+async function handleReply(body) {
+  if (body.transcript) addMessage(body.transcript, 'user');
+  addMessage(body.text, 'jarvis');
+
+  if (body.speechId && voiceOn) {
+    setOrb('thinking');
+    const blob = await fetchSpeech(body.speechId).catch(() => null);
+    window.jarvis.duckMusic(true);
+    setOrb('speaking');
+    if (blob) await playBlob(blob);
+    else await speakLocally(body.text);
+    window.jarvis.duckMusic(false);
+  }
+  if (body.actions?.length) window.jarvis.runActions(body.actions);
+  conversationUntil = performance.now() + CALL.conversationMs;
+}
+
+function setVoice(on) {
+  voiceOn = on;
+  writePref('voice', on ? '1' : '0');
+  $('voice-btn').classList.toggle('on', on);
+  $('voice-btn').setAttribute('aria-pressed', String(on));
+  $('voice-label').textContent = on ? 'Respondendo por voz' : 'Respondendo em texto';
+  if (!on) currentAudio?.pause();
+}
+
+$('voice-btn').addEventListener('click', () => setVoice(!voiceOn));
+
+// ---------- Conexão com o WhatsApp ----------
+
+let pairing = null; // { server, code, secret, link, message, timer }
+
+function currentServer() {
+  return normalizeServer($('server').value) || DEFAULT_SERVER;
+}
+
+function showPairStep(waiting) {
+  $('pair-start').hidden = waiting;
+  $('pair-wait').hidden = !waiting;
+}
+
+function stopPairing() {
+  if (pairing?.timer) clearInterval(pairing.timer);
+  pairing = null;
+  showPairStep(false);
+}
+
+async function finishPairing(server, token, name) {
+  stopPairing();
+  const saved = await window.jarvis.saveConfig({ server, token, name });
+  config = { ...config, ...saved, token };
+  showChat();
+}
+
+async function startWhatsAppPairing() {
+  $('pair-error').textContent = '';
+  const server = currentServer();
+  $('whatsapp-btn').disabled = true;
+  try {
+    const res = await fetch(`${server}/api/desktop/pair/start`, { method: 'POST' });
+    if (res.status === 404) throw new Error('O servidor ainda está numa versão antiga. Use "Já recebi um código do Jarvis" abaixo.');
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `Erro ${res.status}`);
+
+    pairing = { server, ...body };
+    $('pair-message').textContent = body.message;
+    showPairStep(true);
+    if (body.link) window.open(body.link);
+    pairing.timer = setInterval(pollPairing, 2000);
+  } catch (err) {
+    $('pair-error').textContent = err.message === 'Failed to fetch' ? 'Não consegui falar com o servidor. Confira se está na mesma rede.' : err.message;
+  } finally {
+    $('whatsapp-btn').disabled = false;
+  }
+}
+
+async function pollPairing() {
+  if (!pairing) return;
+  const { server, code, secret } = pairing;
+  try {
+    const res = await fetch(`${server}/api/desktop/pair/status?code=${code}&secret=${secret}`);
+    const body = await res.json();
+    if (body.status === 'approved') return finishPairing(server, body.token, body.name);
+    if (body.status === 'expired') {
+      stopPairing();
+      $('pair-error').textContent = 'O tempo para enviar a mensagem acabou. Tente de novo.';
+    }
+  } catch {
+    // servidor fora do ar por um instante: tenta no próximo ciclo
+  }
+}
+
+$('whatsapp-btn').addEventListener('click', startWhatsAppPairing);
+$('pair-reopen').addEventListener('click', () => pairing?.link && window.open(pairing.link));
+$('pair-cancel').addEventListener('click', stopPairing);
+$('pair-message').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('pair-message').textContent);
+    $('pair-error').textContent = '';
+    $('pair-message').dataset.copied = '1';
+    const original = $('pair-message').textContent;
+    $('pair-message').textContent = 'Copiado!';
+    setTimeout(() => ($('pair-message').textContent = original), 1200);
+  } catch {
+    // sem área de transferência: a pessoa digita
+  }
+});
+
+async function pairWithCode(code) {
+  const server = currentServer();
+  $('pair-error').textContent = '';
+  try {
+    const res = await fetch(`${server}/api/desktop/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `Erro ${res.status}`);
+    $('code').value = '';
+    await finishPairing(server, body.token, body.name);
+  } catch (err) {
+    $('pair-error').textContent = err.message === 'Failed to fetch' ? 'Não consegui falar com o servidor. Confira se está na mesma rede.' : err.message;
+  }
+}
+
+$('code-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const code = $('code').value.trim();
+  if (/^\d{6}$/.test(code)) pairWithCode(code);
+  else $('pair-error').textContent = 'O código tem 6 dígitos.';
+});
+$('code').addEventListener('input', () => {
+  $('code').value = $('code').value.replace(/\D/g, '').slice(0, 6);
+  if ($('code').value.length === 6) pairWithCode($('code').value);
+});
+$('server').addEventListener('input', () => {
+  $('server-label').textContent = currentServer().replace(/^https?:\/\//, '');
+});
 
 // ---------- Telas ----------
 
 function showSetup(error = '') {
-  endCall({ silent: true });
+  endCall();
+  document.body.classList.add('setup-mode');
   $('chat').hidden = true;
   $('setup').hidden = false;
-  $('server').value = config.server || 'http://192.168.3.122:4545';
+  $('server').value = config.server || DEFAULT_SERVER;
+  $('server-label').textContent = currentServer().replace(/^https?:\/\//, '');
   $('pair-error').textContent = error;
-  (config.server ? $('code') : $('server')).focus();
+  showName('');
+  showPairStep(!!pairing);
 }
 
 function showName(name) {
@@ -98,14 +318,14 @@ async function syncName() {
 }
 
 function showChat() {
-  showName(config.name);
-  syncName();
+  document.body.classList.remove('setup-mode');
   $('setup').hidden = true;
   $('chat').hidden = false;
-  $('hint').textContent = `Atalho para falar: ${config.shortcut}`;
-  $('input').focus();
+  $('hint').textContent = `${config.shortcut} liga/desliga a escuta`;
+  showName(config.name);
+  syncName();
   loadHistory();
-  startCall({ silent: true }); // o app sempre abre ouvindo
+  startCall(); // o app sempre abre ouvindo
 }
 
 // A conversa é a mesma do WhatsApp: mostra o que já foi dito lá (e aqui).
@@ -120,92 +340,35 @@ async function loadHistory() {
   $('messages').replaceChildren();
   for (const m of history) addMessage(m.text, m.role === 'user' ? 'user' : 'jarvis');
   if (!history.length) {
-    addMessage(`Olá${config.name ? `, ${config.name}` : ''}. Pode escrever ou falar comigo. Pelo WhatsApp eu continuo à disposição, é a mesma conversa.`, 'system');
+    addMessage(`Olá${config.name ? `, ${config.name}` : ''}. Estou ouvindo: é só dizer "Jarvis". Pelo WhatsApp eu continuo à disposição, é a mesma conversa.`, 'system');
   }
 }
 
-$('pair-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const server = normalizeServer($('server').value);
-  const code = $('code').value.trim();
-  if (!server || !/^\d{6}$/.test(code)) {
-    $('pair-error').textContent = 'Informe o endereço do servidor e o código de 6 dígitos.';
-    return;
-  }
-  $('pair-btn').disabled = true;
-  $('pair-error').textContent = '';
-  try {
-    const res = await fetch(`${server}/api/desktop/pair`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `Erro ${res.status}`);
-    const saved = await window.jarvis.saveConfig({ server, token: body.token, name: body.name });
-    config = { ...config, ...saved, token: body.token };
-    $('code').value = '';
-    showChat();
-  } catch (err) {
-    $('pair-error').textContent = err.message === 'Failed to fetch' ? 'Não consegui falar com o servidor. Confira o endereço e se está na mesma rede.' : err.message;
-  } finally {
-    $('pair-btn').disabled = false;
-  }
-});
+// ---------- Conversa por texto ----------
 
-// ---------- Conversa ----------
-
-async function handleReply(body) {
-  if (body.transcript) addMessage(body.transcript, 'user');
-  addMessage(body.text, 'jarvis');
-
-  // Ações (ex: tocar música) só começam depois que o Jarvis termina de falar.
-  const speech = body.audio ? playVoice(body.audio) : body.voiceUnavailable ? speakLocally(body.text) : Promise.resolve();
-  const done = speech.then(() => {
-    if (body.actions?.length) window.jarvis.runActions(body.actions);
-  });
-  if (call) await done;
-}
-
-let warnedVoice = false;
-
-/** Plano B quando a voz natural do servidor não está disponível (cota diária): voz pt-BR do Windows, se instalada. */
-async function speakLocally(text) {
-  const voice = speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith('pt'));
-  if (!voice) {
-    if (!warnedVoice) {
-      warnedVoice = true;
-      addMessage('A voz natural do Jarvis atingiu o limite diário e este computador não tem voz em português instalada. Respondo por texto até a cota voltar (ou instale a voz Maria em Configurações do Windows > Hora e idioma > Fala).', 'system');
-    }
-    return;
-  }
-  const speech = new SpeechSynthesisUtterance(text.replace(/https?:\/\/\S+/g, '').replace(/[*_~`#>]/g, ''));
-  speech.voice = voice;
-  speech.lang = voice.lang;
-  await new Promise((resolve) => {
-    speech.onend = speech.onerror = () => resolve();
-    speechSynthesis.speak(speech);
-  });
+function setBusy(on) {
+  busy = on;
+  $('send').disabled = on;
 }
 
 async function sendText(text) {
   if (busy || !text) return;
   setBusy(true);
+  if (call) call.state = 'processing';
   addMessage(text, 'user');
-  const thinking = addMessage('Jarvis está pensando...', 'system thinking');
+  setOrb('thinking');
   try {
-    const body = await api(`/message${$('voice-toggle').checked ? '?voice=1' : ''}`, {
+    const body = await api(`/message${voiceOn ? '' : '?voice=0'}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-    thinking.remove();
     await handleReply(body);
   } catch (err) {
-    thinking.remove();
-    if (err.message !== 'unauthorized') addMessage(err.message === 'Failed to fetch' ? 'Sem conexão com o servidor. Vou continuar tentando.' : err.message, 'system error');
+    if (err.message !== 'unauthorized') addMessage(friendly(err), 'system error');
   } finally {
     setBusy(false);
+    resumeListening();
   }
 }
 
@@ -232,169 +395,24 @@ function autoGrow() {
 }
 $('input').addEventListener('input', autoGrow);
 
-// ---------- Voz ----------
+// ---------- Escuta contínua ----------
+// Mede o volume do microfone, detecta início e fim da fala, e manda só esse trecho
+// (com uma folga antes, pra não cortar o "Jarvis"). Fora de uma conversa em andamento,
+// o servidor só responde se ouvir "Jarvis" ou uma saudação.
 
-async function startRecording() {
-  if (busy || recorder) return;
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const chunks = [];
-    const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    rec.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      recorder = null;
-      $('mic').classList.remove('recording');
-      const blob = new Blob(chunks, { type: 'audio/webm' });
-      if (blob.size < 2000) return;
-      await sendAudio(blob);
-    };
-    rec.start();
-    recorder = rec;
-    currentAudio?.pause();
-    $('mic').classList.add('recording');
-  } catch {
-    addMessage('Não consegui acessar o microfone. Verifique a permissão do Windows para aplicativos.', 'system error');
-  }
-}
-
-function stopRecording() {
-  if (recorder?.state === 'recording') recorder.stop();
-}
-
-function toggleRecording() {
-  if (recorder) stopRecording();
-  else startRecording();
-}
-
-async function sendAudio(blob) {
-  setBusy(true);
-  const thinking = addMessage('Jarvis está ouvindo...', 'system thinking');
-  try {
-    const body = await api('/audio', { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: blob });
-    thinking.remove();
-    await handleReply(body);
-  } catch (err) {
-    thinking.remove();
-    if (err.message !== 'unauthorized') addMessage(err.message, 'system error');
-  } finally {
-    setBusy(false);
-  }
-}
-
-$('mic').addEventListener('click', toggleRecording);
-// Ctrl+Alt+J liga/desliga a chamada de voz.
-window.jarvis.on('toggle-record', () => {
-  if (!$('chat').hidden) toggleCall();
-});
-
-// ---------- Música ----------
-
-let paused = false;
-
-function showNowPlaying(info) {
-  $('player').hidden = !info;
-  if (!info) return;
-  paused = !!info.paused;
-  $('player-title').textContent = info.title || '';
-  $('player-toggle').textContent = paused ? 'Continuar' : 'Pausar';
-}
-
-window.jarvis.on('now-playing', showNowPlaying);
-
-$('player-toggle').addEventListener('click', () => window.jarvis.musicControl(paused ? 'resume' : 'pause'));
-$('player-stop').addEventListener('click', () => window.jarvis.musicControl('stop'));
-$('player-show').addEventListener('click', () => window.jarvis.showPlayer());
-
-// ---------- Conexão ----------
-
-let lastStatus = '';
-
-function applyStatus(status) {
-  // Voltou a conectar: busca o que rolou no WhatsApp enquanto estava fora.
-  if (status === 'online' && lastStatus && lastStatus !== 'online' && !$('chat').hidden) loadHistory();
-  lastStatus = status;
-  $('status-dot').className = `dot ${status}`;
-  $('status-dot').title = { online: 'Conectado ao servidor', offline: 'Sem conexão. Tentando de novo...', unauthorized: 'Aparelho desconectado' }[status] || '';
-  if (status === 'unauthorized') showSetup('Este computador foi desconectado. Peça um novo código ao Jarvis.');
-}
-
-window.jarvis.on('connection', applyStatus);
-
-window.jarvis.on('chat', ({ user, reply }) => {
-  if (user) addMessage(user, 'user');
-  if (reply) addMessage(reply, 'jarvis');
-});
-
-window.jarvis.on('notice', (text) => addMessage(text, 'system'));
-
-window.jarvis.on('config', (next) => {
-  config = { ...config, ...next, token: next.paired ? config.token : '' };
-  if (!next.paired) showSetup();
-});
-
-$('disconnect').addEventListener('click', () => window.jarvis.disconnect());
-
-$('voice-toggle').checked = (() => {
-  try {
-    return localStorage.getItem('voice') === '1';
-  } catch {
-    return false;
-  }
-})();
-$('voice-toggle').addEventListener('change', () => {
-  try {
-    localStorage.setItem('voice', $('voice-toggle').checked ? '1' : '0');
-  } catch {
-    // preferência só cosmética
-  }
-});
-
-(async function init() {
-  config = await window.jarvis.getConfig();
-  applyStatus(config.status);
-  if (config.nowPlaying) showNowPlaying({ ...config.nowPlaying, paused: false });
-  if (config.paired) showChat();
-  else showSetup();
-})();
-
-// ---------- Chamada de voz (conversa sem usar as mãos) ----------
-// Escuta o microfone, detecta quando você começa e termina de falar (por volume),
-// manda o trecho pro Jarvis e toca a resposta falada; depois volta a escutar.
-
-const CALL = { minVoiceMs: 350, silenceMs: 1300, maxUtteranceMs: 30000, tickMs: 50, conversationMs: 20000, preRollSec: 0.6 };
+const CALL = { minVoiceMs: 300, silenceMs: 850, maxUtteranceMs: 30000, tickMs: 40, conversationMs: 20000, preRollSec: 0.6 };
 let call = null;
-// Depois que o Jarvis responde, a conversa segue sem precisar chamar o nome por alguns segundos.
 let conversationUntil = 0;
 const inConversation = () => performance.now() < conversationUntil;
-const listeningLabel = () => (inConversation() ? 'Ouvindo...' : 'Ouvindo (diga "Jarvis")');
 
-function setCallStatus(text) {
-  $('call-status').textContent = text;
-}
-
-function beep(freq, ms) {
-  try {
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = freq;
-    gain.gain.value = 0.06;
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    setTimeout(() => { osc.stop(); ctx.close(); }, ms);
-  } catch {
-    // som é só um detalhe
-  }
-}
-
-async function startCall({ silent = false } = {}) {
-  if (call || busy) return;
+async function startCall() {
+  if (call) return;
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch {
-    addMessage('Não consegui acessar o microfone. Verifique a permissão do Windows para aplicativos.', 'system error');
+    addMessage('Não consegui acessar o microfone. Verifique em Configurações do Windows > Privacidade > Microfone.', 'system error');
+    restOrb();
     return;
   }
   const ctx = new AudioContext();
@@ -407,17 +425,12 @@ async function startCall({ silent = false } = {}) {
   source.connect(processor);
   processor.connect(ctx.destination); // precisa estar ligado pra rodar; não emite som (saída vazia)
 
-  call = { stream, ctx, analyser, processor, state: 'listening', floor: 0.01, loud: 0, ring: [], ringSamples: 0, utter: [], startedAt: 0, lastVoiceAt: 0, voicedMs: 0 };
+  call = { stream, ctx, analyser, processor, state: busy ? 'processing' : 'listening', floor: 0.01, loud: 0, ring: [], ringSamples: 0, utter: [], startedAt: 0, lastVoiceAt: 0, voicedMs: 0 };
   call.timer = setInterval(callTick, CALL.tickMs);
-  currentAudio?.pause();
-  $('call-bar').hidden = false;
-  $('call-btn').textContent = 'Desligar';
-  $('call-btn').classList.add('on');
-  setCallStatus(listeningLabel());
-  if (!silent) beep(880, 120);
+  if (!busy) setOrb('listening');
 }
 
-function endCall({ silent = false } = {}) {
+function endCall() {
   if (!call) return;
   const finished = call;
   call = null;
@@ -426,12 +439,7 @@ function endCall({ silent = false } = {}) {
   finished.processor.disconnect();
   finished.stream.getTracks().forEach((t) => t.stop());
   finished.ctx.close().catch(() => {});
-  currentAudio?.pause();
-  $('call-bar').hidden = true;
-  $('call-btn').textContent = 'Ligar';
-  $('call-btn').classList.remove('on');
-  $('call-level').style.width = '0';
-  if (!silent) beep(520, 150);
+  if (!busy) setOrb('off');
 }
 
 function toggleCall() {
@@ -446,17 +454,18 @@ function callTick() {
   let sum = 0;
   for (const v of data) sum += v * v;
   const rms = Math.sqrt(sum / data.length);
-  $('call-level').style.width = `${Math.min(100, rms * 600)}%`;
 
   const now = performance.now();
   const threshold = Math.max(0.025, call.floor * 3);
   const voiced = rms > threshold;
 
   if (call.state === 'listening') {
+    $('orb').style.setProperty('--level', Math.min(1, rms * 6).toFixed(3));
     call.floor = call.floor * 0.97 + rms * 0.03;
     call.loud = voiced ? call.loud + 1 : 0;
     if (call.loud >= 3) startUtterance(now);
   } else if (call.state === 'recording') {
+    $('orb').style.setProperty('--level', Math.min(1, rms * 8).toFixed(3));
     if (voiced) {
       call.lastVoiceAt = now;
       call.voicedMs += CALL.tickMs;
@@ -470,11 +479,11 @@ function startUtterance(now) {
   call.startedAt = now;
   call.lastVoiceAt = now;
   call.voicedMs = CALL.tickMs * call.loud;
-  // Começa com a folga gravada antes da detecção, senão o início da fala (o "Jarvis") se perde.
   call.utter = call.ring;
   call.ring = [];
   call.ringSamples = 0;
-  setCallStatus('Ouvindo você...');
+  currentAudio?.pause();
+  setOrb('recording');
 }
 
 function finishUtterance() {
@@ -486,7 +495,7 @@ function finishUtterance() {
   onUtteranceEnd(samples, rate);
 }
 
-/** Recebe o áudio cru do microfone: guarda uma folga enquanto escuta e acumula durante a fala. */
+/** Áudio cru do microfone: guarda uma folga enquanto escuta e acumula durante a fala. */
 function onSamples(chunk) {
   if (!call) return;
   if (call.state === 'recording') {
@@ -499,14 +508,13 @@ function onSamples(chunk) {
   }
 }
 
-/** PCM float -> WAV 16 bits mono a 16 kHz (leve o bastante pra enviar, suficiente pra reconhecer fala). */
+/** PCM float -> WAV 16 bits mono a 16 kHz (leve pra enviar, suficiente pra reconhecer fala). */
 function encodeWav(chunks, sampleRate) {
   const total = chunks.reduce((n, c) => n + c.length, 0);
   const step = Math.max(1, Math.round(sampleRate / 16000));
   const outRate = Math.round(sampleRate / step);
   const outLen = Math.floor(total / step);
   const pcm = new Int16Array(outLen);
-  let i = 0;
   let acc = 0;
   let count = 0;
   let o = 0;
@@ -541,23 +549,20 @@ function encodeWav(chunks, sampleRate) {
 
 async function onUtteranceEnd(samples, rate) {
   if (!call) return;
-  const active = call;
-  if (active.voicedMs < CALL.minVoiceMs) {
+  if (call.voicedMs < CALL.minVoiceMs) {
     resumeListening();
     return;
   }
   const blob = encodeWav(samples, rate);
-  setCallStatus('Pensando...');
+  setOrb('thinking');
   setBusy(true);
   try {
-    const body = await api(`/audio?call=1&wake=${inConversation() ? 0 : 1}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob });
-    if (!call) return;
-    if (body.ignored) return; // não chamaram o Jarvis: era conversa ao fundo ou música
-    setCallStatus('Falando...');
-    await handleReply(body);
-    conversationUntil = performance.now() + CALL.conversationMs;
+    const params = [`call=1`, `wake=${inConversation() ? 0 : 1}`];
+    if (!voiceOn) params.push('voice=0');
+    const body = await api(`/audio?${params.join('&')}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob });
+    if (!body.ignored) await handleReply(body); // ignorado: conversa ao fundo ou música, sem "Jarvis"
   } catch (err) {
-    if (err.message !== 'unauthorized') addMessage(err.message === 'Failed to fetch' ? 'Sem conexão com o servidor.' : err.message, 'system error');
+    if (err.message !== 'unauthorized') addMessage(friendly(err), 'system error');
   } finally {
     setBusy(false);
     resumeListening();
@@ -565,12 +570,74 @@ async function onUtteranceEnd(samples, rate) {
 }
 
 function resumeListening() {
-  if (!call) return;
+  if (!call) return restOrb();
   call.state = 'listening';
   call.loud = 0;
   call.ring = [];
   call.ringSamples = 0;
-  setCallStatus(listeningLabel());
+  setOrb('listening');
 }
 
-$('call-btn').addEventListener('click', toggleCall);
+$('orb-btn').addEventListener('click', toggleCall);
+window.jarvis.on('toggle-record', () => {
+  if (!$('chat').hidden) toggleCall();
+});
+
+// ---------- Música ----------
+
+let paused = false;
+
+function showNowPlaying(info) {
+  $('player').hidden = !info;
+  if (!info) return;
+  paused = !!info.paused;
+  $('player').classList.toggle('paused', paused);
+  $('player-title').textContent = info.title || '';
+  $('icon-pause').hidden = paused;
+  $('icon-play').hidden = !paused;
+  $('player-toggle').setAttribute('aria-label', paused ? 'Continuar' : 'Pausar');
+  $('player-show').hidden = info.source !== 'app';
+}
+
+window.jarvis.on('now-playing', showNowPlaying);
+$('player-toggle').addEventListener('click', () => window.jarvis.musicControl(paused ? 'resume' : 'pause'));
+$('player-stop').addEventListener('click', () => window.jarvis.musicControl('stop'));
+$('player-show').addEventListener('click', () => window.jarvis.showPlayer());
+
+// ---------- Conexão com o servidor ----------
+
+let lastStatus = '';
+
+function applyStatus(status) {
+  // Voltou a conectar: busca o que rolou no WhatsApp enquanto estava fora.
+  if (status === 'online' && lastStatus && lastStatus !== 'online' && !$('chat').hidden) loadHistory();
+  lastStatus = status;
+  $('status-dot').className = `dot ${status}`;
+  $('status-dot').title = { online: 'Conectado ao servidor', offline: 'Sem conexão. Tentando de novo...', unauthorized: 'Computador desconectado' }[status] || '';
+  if (status === 'unauthorized') showSetup('Este computador foi desconectado. Conecte de novo pelo WhatsApp.');
+}
+
+window.jarvis.on('connection', applyStatus);
+
+window.jarvis.on('chat', ({ user, reply }) => {
+  if (user) addMessage(user, 'user');
+  if (reply) addMessage(reply, 'jarvis');
+});
+
+window.jarvis.on('notice', (text) => addMessage(text, 'system'));
+
+window.jarvis.on('config', (next) => {
+  config = { ...config, ...next, token: next.paired ? config.token : '' };
+  if (!next.paired) showSetup();
+});
+
+$('disconnect').addEventListener('click', () => window.jarvis.disconnect());
+
+(async function init() {
+  setVoice(voiceOn);
+  config = await window.jarvis.getConfig();
+  applyStatus(config.status);
+  if (config.nowPlaying) showNowPlaying(config.nowPlaying);
+  if (config.paired) showChat();
+  else showSetup();
+})();

@@ -40,12 +40,54 @@ export function redeemPairingCode(code) {
     return { error: 'Código inválido ou expirado. Peça um novo ao Jarvis no WhatsApp.' };
   }
   codes.delete(code);
+  return { token: issueToken(entry.personId), personId: entry.personId };
+}
 
+function issueToken(personId) {
   const token = randomBytes(32).toString('hex');
   const tokens = readTokens();
-  tokens[sha256(token)] = { personId: entry.personId, createdAt: new Date().toISOString() };
+  tokens[sha256(token)] = { personId, createdAt: new Date().toISOString() };
   writeTokens(tokens);
-  return { token, personId: entry.personId };
+  return token;
+}
+
+// --- Pareamento iniciado pelo app (a pessoa só aperta "enviar" no WhatsApp) ---
+// O app pede um código, abre o WhatsApp com "conectar computador 123456" pronto e fica
+// perguntando; quando a mensagem chega do número da pessoa, o Jarvis aprova e entrega o token.
+
+const requests = new Map(); // código -> { secret, expiresAt, personId, token }
+
+export function createDesktopRequest() {
+  const now = Date.now();
+  for (const [code, entry] of requests) if (entry.expiresAt < now) requests.delete(code);
+  let code;
+  do code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+  while (requests.has(code) || codes.has(code));
+  const secret = randomBytes(24).toString('hex');
+  requests.set(code, { secret, expiresAt: now + CODE_TTL_MS, personId: null, token: null });
+  return { code, secret, expiresInMinutes: CODE_TTL_MS / 60000 };
+}
+
+/** Chamado quando uma mensagem do WhatsApp traz o código: liga o computador àquela pessoa. */
+export function approveDesktopRequest(code, personId) {
+  const entry = requests.get(code);
+  if (!entry || entry.expiresAt < Date.now() || entry.personId) return false;
+  entry.personId = personId;
+  entry.token = issueToken(personId);
+  return true;
+}
+
+/** O app pergunta se já foi aprovado; o token é entregue uma única vez. */
+export function pollDesktopRequest(code, secret) {
+  const entry = requests.get(code);
+  if (!entry || entry.secret !== secret) return { status: 'expired' };
+  if (entry.expiresAt < Date.now() && !entry.token) {
+    requests.delete(code);
+    return { status: 'expired' };
+  }
+  if (!entry.token) return { status: 'pending' };
+  requests.delete(code);
+  return { status: 'approved', token: entry.token, personId: entry.personId };
 }
 
 function readTokens() {

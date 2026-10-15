@@ -17,7 +17,7 @@ import { createStore } from './store.js';
 import { createBrain } from './gemini.js';
 import { createMemory } from './memory.js';
 import { hasLink, MAX_SPOKEN_CHARS } from './voice.js';
-import { pushToDesktop } from './desktop.js';
+import { pushToDesktop, approveDesktopRequest } from './desktop.js';
 import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, updatePerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +32,7 @@ const logger = pino({ level: 'silent' });
 const JARVIS_LABEL = '𝗝𝗮𝗿𝘃𝗶𝘀:';
 
 const MEDIA_TIMEOUT_MS = 90000;
+const PAIRING_RE = /^conectar\s+(?:o\s+)?(?:meu\s+)?(?:computador|pc|app)\D{0,3}(\d{6})$/i;
 
 function withTimeout(promise, ms, message) {
   let timer;
@@ -75,6 +76,11 @@ function getBrain(person) {
 }
 
 export { getBrain };
+
+/** Número do WhatsApp do Jarvis (só dígitos), pra o app abrir a conversa certa. */
+export function getJarvisNumber() {
+  return sock?.user?.id?.split(/[:@]/)[0] || process.env.JARVIS_NUMBER || '';
+}
 
 /** Descarta a sessão em memória de uma pessoa (chamado ao editar/remover). */
 export function forgetBrain(personId) {
@@ -293,6 +299,12 @@ export async function startJarvisConnection() {
   onGuarded('message', async (person, text) => {
     console.log(`${TAG} [${person.id}] Recebido: ${text}`);
     try {
+      // "conectar computador 123456" vindo do app: liga o PC a esta pessoa, sem passar pelo modelo.
+      const pairing = PAIRING_RE.exec(text.trim());
+      if (pairing && approveDesktopRequest(pairing[1], person.id)) {
+        await sendToPerson(person.jid, `Pronto, ${person.displayName}! Seu computador está conectado. Pode falar comigo por lá também, é a mesma conversa.`);
+        return;
+      }
       const brain = getBrain(person);
       await deliverReply(person, brain, await brain.converse(text));
     } catch (err) {
