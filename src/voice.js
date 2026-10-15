@@ -67,14 +67,24 @@ const GREETING_RE = new RegExp(
     '^' + OPENER + 'jarvis (?:(?:ta|esta|voce ta|voce esta) )?(?:ai|acordado|ouvindo|por ai)$',
 );
 
-export function isGreeting(text) {
-  const normalized = String(text || '')
+/** Minúsculo, sem acento nem pontuação; "Jarvi/Garvis/carvice" (erros de transcrição) viram "jarvis". */
+function normalizeSpeech(text) {
+  return String(text || '')
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/\b[jgc][aeiouy]r[vw][a-z]{1,3}\b/g, 'jarvis') // "Jarvi", "Garvis", "carvice": erros comuns de transcrição
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b[jgc][aeiouy]r[vw][a-z]{1,3}\b/g, 'jarvis')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function isGreeting(text) {
+  const normalized = normalizeSpeech(text);
   return normalized.length > 0 && normalized.length <= 70 && GREETING_RE.test(normalized);
+}
+
+/** A fala chama o Jarvis pelo nome? (palavra de ativação do app que fica sempre ouvindo) */
+export function hasWakeWord(text) {
+  return / jarvis /.test(` ${normalizeSpeech(text)} `);
 }

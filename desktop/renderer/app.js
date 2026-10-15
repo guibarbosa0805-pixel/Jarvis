@@ -70,6 +70,7 @@ function setBusy(on) {
 // ---------- Telas ----------
 
 function showSetup(error = '') {
+  endCall({ silent: true });
   $('chat').hidden = true;
   $('setup').hidden = false;
   $('server').value = config.server || 'http://192.168.3.122:4545';
@@ -77,12 +78,34 @@ function showSetup(error = '') {
   (config.server ? $('code') : $('server')).focus();
 }
 
+function showName(name) {
+  $('person-name').textContent = name || '';
+  document.title = name ? `Jarvis - ${name}` : 'Jarvis';
+}
+
+/** O nome mostrado é sempre o cadastrado no servidor (o mesmo do WhatsApp). */
+async function syncName() {
+  try {
+    const { name } = await api('/me');
+    if (name && name !== config.name) {
+      config.name = name;
+      await window.jarvis.saveConfig({ server: config.server, token: config.token, name });
+    }
+    showName(name || config.name);
+  } catch {
+    showName(config.name);
+  }
+}
+
 function showChat() {
+  showName(config.name);
+  syncName();
   $('setup').hidden = true;
   $('chat').hidden = false;
   $('hint').textContent = `Atalho para falar: ${config.shortcut}`;
   $('input').focus();
   loadHistory();
+  startCall({ silent: true }); // o app sempre abre ouvindo
 }
 
 // A conversa é a mesma do WhatsApp: mostra o que já foi dito lá (e aqui).
@@ -339,8 +362,12 @@ $('voice-toggle').addEventListener('change', () => {
 // Escuta o microfone, detecta quando você começa e termina de falar (por volume),
 // manda o trecho pro Jarvis e toca a resposta falada; depois volta a escutar.
 
-const CALL = { minVoiceMs: 350, silenceMs: 1300, maxUtteranceMs: 30000, tickMs: 50 };
+const CALL = { minVoiceMs: 350, silenceMs: 1300, maxUtteranceMs: 30000, tickMs: 50, conversationMs: 20000, preRollSec: 0.6 };
 let call = null;
+// Depois que o Jarvis responde, a conversa segue sem precisar chamar o nome por alguns segundos.
+let conversationUntil = 0;
+const inConversation = () => performance.now() < conversationUntil;
+const listeningLabel = () => (inConversation() ? 'Ouvindo...' : 'Ouvindo (diga "Jarvis")');
 
 function setCallStatus(text) {
   $('call-status').textContent = text;
@@ -361,7 +388,7 @@ function beep(freq, ms) {
   }
 }
 
-async function startCall() {
+async function startCall({ silent = false } = {}) {
   if (call || busy) return;
   let stream;
   try {
@@ -373,27 +400,30 @@ async function startCall() {
   const ctx = new AudioContext();
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 1024;
-  ctx.createMediaStreamSource(stream).connect(analyser);
+  const source = ctx.createMediaStreamSource(stream);
+  source.connect(analyser);
+  const processor = ctx.createScriptProcessor(2048, 1, 1);
+  processor.onaudioprocess = (e) => onSamples(new Float32Array(e.inputBuffer.getChannelData(0)));
+  source.connect(processor);
+  processor.connect(ctx.destination); // precisa estar ligado pra rodar; não emite som (saída vazia)
 
-  call = { stream, ctx, analyser, state: 'listening', floor: 0.01, loud: 0, recorder: null, chunks: [], startedAt: 0, lastVoiceAt: 0, voicedMs: 0 };
+  call = { stream, ctx, analyser, processor, state: 'listening', floor: 0.01, loud: 0, ring: [], ringSamples: 0, utter: [], startedAt: 0, lastVoiceAt: 0, voicedMs: 0 };
   call.timer = setInterval(callTick, CALL.tickMs);
   currentAudio?.pause();
   $('call-bar').hidden = false;
   $('call-btn').textContent = 'Desligar';
   $('call-btn').classList.add('on');
-  setCallStatus('Ouvindo...');
-  beep(880, 120);
+  setCallStatus(listeningLabel());
+  if (!silent) beep(880, 120);
 }
 
-function endCall() {
+function endCall({ silent = false } = {}) {
   if (!call) return;
   const finished = call;
   call = null;
   clearInterval(finished.timer);
-  if (finished.recorder?.state === 'recording') {
-    finished.recorder.onstop = null;
-    finished.recorder.stop();
-  }
+  finished.processor.onaudioprocess = null;
+  finished.processor.disconnect();
   finished.stream.getTracks().forEach((t) => t.stop());
   finished.ctx.close().catch(() => {});
   currentAudio?.pause();
@@ -401,7 +431,7 @@ function endCall() {
   $('call-btn').textContent = 'Ligar';
   $('call-btn').classList.remove('on');
   $('call-level').style.width = '0';
-  beep(520, 150);
+  if (!silent) beep(520, 150);
 }
 
 function toggleCall() {
@@ -440,35 +470,92 @@ function startUtterance(now) {
   call.startedAt = now;
   call.lastVoiceAt = now;
   call.voicedMs = CALL.tickMs * call.loud;
-  call.chunks = [];
-  const recorder = new MediaRecorder(call.stream, { mimeType: 'audio/webm;codecs=opus' });
-  recorder.ondataavailable = (e) => e.data.size && call?.chunks.push(e.data);
-  recorder.onstop = onUtteranceEnd;
-  recorder.start();
-  call.recorder = recorder;
+  // Começa com a folga gravada antes da detecção, senão o início da fala (o "Jarvis") se perde.
+  call.utter = call.ring;
+  call.ring = [];
+  call.ringSamples = 0;
   setCallStatus('Ouvindo você...');
 }
 
 function finishUtterance() {
-  if (call?.recorder?.state === 'recording') call.recorder.stop();
+  if (!call) return;
   call.state = 'processing';
+  const samples = call.utter;
+  const rate = call.ctx.sampleRate;
+  call.utter = [];
+  onUtteranceEnd(samples, rate);
 }
 
-async function onUtteranceEnd() {
+/** Recebe o áudio cru do microfone: guarda uma folga enquanto escuta e acumula durante a fala. */
+function onSamples(chunk) {
+  if (!call) return;
+  if (call.state === 'recording') {
+    call.utter.push(chunk);
+  } else if (call.state === 'listening') {
+    call.ring.push(chunk);
+    call.ringSamples += chunk.length;
+    const keep = call.ctx.sampleRate * CALL.preRollSec;
+    while (call.ring.length > 1 && call.ringSamples - call.ring[0].length >= keep) call.ringSamples -= call.ring.shift().length;
+  }
+}
+
+/** PCM float -> WAV 16 bits mono a 16 kHz (leve o bastante pra enviar, suficiente pra reconhecer fala). */
+function encodeWav(chunks, sampleRate) {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const step = Math.max(1, Math.round(sampleRate / 16000));
+  const outRate = Math.round(sampleRate / step);
+  const outLen = Math.floor(total / step);
+  const pcm = new Int16Array(outLen);
+  let i = 0;
+  let acc = 0;
+  let count = 0;
+  let o = 0;
+  for (const chunk of chunks) {
+    for (let k = 0; k < chunk.length && o < outLen; k++) {
+      acc += chunk[k];
+      if (++count === step) {
+        pcm[o++] = Math.max(-1, Math.min(1, acc / step)) * 0x7fff;
+        acc = 0;
+        count = 0;
+      }
+    }
+  }
+  const buffer = new ArrayBuffer(44 + pcm.length * 2);
+  const view = new DataView(buffer);
+  const write = (offset, text) => [...text].forEach((ch, idx) => view.setUint8(offset + idx, ch.charCodeAt(0)));
+  write(0, 'RIFF');
+  view.setUint32(4, 36 + pcm.length * 2, true);
+  write(8, 'WAVEfmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, outRate, true);
+  view.setUint32(28, outRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, 'data');
+  view.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buffer, 44).set(pcm);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function onUtteranceEnd(samples, rate) {
   if (!call) return;
   const active = call;
-  const blob = new Blob(active.chunks, { type: 'audio/webm' });
-  if (active.voicedMs < CALL.minVoiceMs || blob.size < 2000) {
+  if (active.voicedMs < CALL.minVoiceMs) {
     resumeListening();
     return;
   }
+  const blob = encodeWav(samples, rate);
   setCallStatus('Pensando...');
   setBusy(true);
   try {
-    const body = await api('/audio?call=1', { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: blob });
+    const body = await api(`/audio?call=1&wake=${inConversation() ? 0 : 1}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob });
     if (!call) return;
+    if (body.ignored) return; // não chamaram o Jarvis: era conversa ao fundo ou música
     setCallStatus('Falando...');
     await handleReply(body);
+    conversationUntil = performance.now() + CALL.conversationMs;
   } catch (err) {
     if (err.message !== 'unauthorized') addMessage(err.message === 'Failed to fetch' ? 'Sem conexão com o servidor.' : err.message, 'system error');
   } finally {
@@ -481,8 +568,9 @@ function resumeListening() {
   if (!call) return;
   call.state = 'listening';
   call.loud = 0;
-  call.recorder = null;
-  setCallStatus('Ouvindo...');
+  call.ring = [];
+  call.ringSamples = 0;
+  setCallStatus(listeningLabel());
 }
 
 $('call-btn').addEventListener('click', toggleCall);

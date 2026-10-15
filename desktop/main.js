@@ -41,8 +41,9 @@ let win = null;
 let tray = null;
 let quitting = false;
 
-function createWindow() {
+function createWindow(visible = true) {
   win = new BrowserWindow({
+    show: false,
     width: 440,
     height: 680,
     minWidth: 360,
@@ -55,6 +56,8 @@ function createWindow() {
   });
   win.setMenu(null);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // Iniciado com o Windows a janela fica escondida na bandeja, mas carrega: o Jarvis já está ouvindo.
+  if (visible) win.once('ready-to-show', () => win.show());
   win.on('close', (e) => {
     if (quitting) return;
     e.preventDefault();
@@ -409,7 +412,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media' || permission === 'notifications'));
 
   buildTray();
-  if (!process.argv.includes('--hidden') || !config.token) createWindow();
+  createWindow(!(process.argv.includes('--hidden') && config.token));
   globalShortcut.register(SHORTCUT, toggleRecording);
   connectEvents();
 });

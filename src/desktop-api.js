@@ -4,7 +4,7 @@ import { findPersonById } from './people.js';
 import { createStore } from './store.js';
 import { createMemory, readableMessages } from './memory.js';
 import { redeemPairingCode, personIdFromToken, attachClient } from './desktop.js';
-import { hasLink, MAX_SPOKEN_CHARS, wavToOggOpus } from './voice.js';
+import { hasLink, hasWakeWord, isGreeting, MAX_SPOKEN_CHARS, wavToOggOpus } from './voice.js';
 
 const TAG = '[painel]';
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
@@ -119,6 +119,10 @@ export function createDesktopRouter() {
       const ogg = await wavToOggOpus(req.body, req.get('content-type') || '');
       const transcript = await getBrain(req.person).transcribeAudio(ogg, 'audio/ogg');
       if (!transcript) return res.json({ transcript: '', text: 'Não consegui entender o áudio, pode tentar de novo?', actions: [] });
+      // App sempre ouvindo: fora de uma conversa em andamento, só reage se chamarem o Jarvis (ou saudarem).
+      if (req.query.wake === '1' && !hasWakeWord(transcript) && !isGreeting(transcript)) {
+        return res.json({ transcript, ignored: true, actions: [] });
+      }
       return reply(req, res, transcript, { transcript, spoken: true });
     } catch (err) {
       console.error(`${TAG} [${req.person.id}] Erro ao processar áudio do app:`, err?.message || err);

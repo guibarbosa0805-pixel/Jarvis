@@ -111,3 +111,4 @@ footer { display: flex; justify-content: space-between; align-items: center; pad
 .call-status { font-weight: 600; color: var(--success); }
 .meter { flex: 1; max-width: 160px; height: 6px; border-radius: 3px; background: var(--border-strong); overflow: hidden; }
 .meter-fill { display: block; height: 100%; width: 0; background: var(--success); transition: width 60ms linear; }
+.person-name { font-weight: 400; font-size: 13px; color: var(--text-muted); padding-left: 10px; border-left: 1px solid var(--border-strong); }
