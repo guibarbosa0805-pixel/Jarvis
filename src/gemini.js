@@ -3,7 +3,7 @@ import * as defaultStore from './store.js';
 import { leadOffsets } from './store.js';
 import { formatDateShort, formatTime } from './format.js';
 import { buildBriefingData } from './briefing.js';
-import { speakableText, wavToOggOpus, MAX_SPOKEN_CHARS } from './voice.js';
+import { speakableText, wavToOggOpus, isGreeting, MAX_SPOKEN_CHARS } from './voice.js';
 import { searchMusic, searchLinks } from './music.js';
 import { createPairingCode, isDesktopOnline, pushToDesktop } from './desktop.js';
 import { findPersonById, updatePerson } from './people.js';
@@ -382,7 +382,7 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
 
   // "Bom dia" sozinho dispara a rotina configurada (voz + música), sem passar pelo modelo.
   async function goodMorningRoutine(text, channel) {
-    if (!personId || text.length > 30 || !/^\s*(bom\s*dia|bomdia)(\s+jarvis)?\s*[!.,]*\s*$/i.test(text)) return null;
+    if (!personId || !isGreeting(text)) return null;
     const routine = findPersonById(personId)?.goodMorning;
     if (!routine?.reply) return null;
 

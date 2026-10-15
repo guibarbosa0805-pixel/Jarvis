@@ -54,3 +54,27 @@ export function wavToOggOpus(audioBuffer, mimeType = 'audio/wav') {
     p.stdin.end(audioBuffer);
   });
 }
+
+// Saudações que disparam a rotina de bom dia (texto ou áudio transcrito), ex:
+// "bom dia", "bom dia Jarvis", "bom dia crianças, papai chegou", "ei Jarvis, tá aí?".
+// Só vale se a mensagem for TODA uma saudação — "bom dia, me lembra de X" segue pro modelo.
+// O texto já chega normalizado (minúsculo, sem acento/pontuação, espaços únicos), então a regex usa espaço literal.
+const FILLER = '(?:jarvis|crianca|criancas|pessoal|senhor|amigo|meu amigo|tudo bem|papai chegou|o papai chegou|cheguei|ja cheguei)';
+const OPENER = '(?:(?:ei|e ai|oi|ola|opa|fala) )?';
+const GREETING_RE = new RegExp(
+  '^' + OPENER + '(?:jarvis )?bom ?dia(?: ' + FILLER + ')*$|' +
+    '^(?:o )?papai chegou$|' +
+    '^' + OPENER + 'jarvis (?:(?:ta|esta|voce ta|voce esta) )?(?:ai|acordado|ouvindo|por ai)$',
+);
+
+export function isGreeting(text) {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\b[jgc][aeiouy]r[vw][a-z]{1,3}\b/g, 'jarvis') // "Jarvi", "Garvis", "carvice": erros comuns de transcrição
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length > 0 && normalized.length <= 70 && GREETING_RE.test(normalized);
+}
