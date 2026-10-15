@@ -1,5 +1,6 @@
 // Janelinha do canto: só mostra o estado que a janela principal publica e manda comandos.
 const $ = (id) => document.getElementById(id);
+const orbView = createOrb($('orb-canvas'));
 
 let lastText = '';
 let nowPlaying = null;
@@ -26,11 +27,11 @@ function shortLabel(state, label) {
 function applyState({ state, label, last, level }) {
   if (state) {
     $('orb').dataset.state = state;
+    orbView.setState(state);
     $('label').classList.toggle('active', state !== 'off' && state !== 'listening');
-    if (state !== 'listening' && state !== 'recording') $('orb').style.setProperty('--level', 0);
   }
   if (label !== undefined) $('label').textContent = shortLabel($('orb').dataset.state, label);
-  if (level !== undefined) $('orb').style.setProperty('--level', Number(level).toFixed(3));
+  if (level !== undefined) orbView.setLevel(level);
   if (last !== undefined) {
     lastText = last;
     render();

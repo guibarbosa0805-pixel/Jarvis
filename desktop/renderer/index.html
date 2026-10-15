@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http: https:; media-src data: blob: file:; img-src 'self' data: file:; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http: https: ws: wss:; media-src data: blob: file:; img-src 'self' data: file:; style-src 'self'; script-src 'self'">
   <title>Jarvis</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -18,7 +18,7 @@
   <!-- Conexão com o WhatsApp -->
   <section id="setup" class="view setup" hidden>
     <div class="setup-inner">
-      <div class="setup-mark" aria-hidden="true"><div class="orb orb-idle"><span class="orb-ring"></span><span class="orb-core"></span></div></div>
+      <div class="setup-mark" aria-hidden="true"><canvas id="setup-orb" class="setup-orb"></canvas></div>
       <h1>Conecte ao seu Jarvis</h1>
       <p class="lead">O mesmo Jarvis do seu WhatsApp, agora no computador: mesma conversa, mesma agenda, com voz.</p>
 
@@ -68,7 +68,7 @@
   <section id="chat" class="view chat" hidden>
     <div class="hero">
       <button id="orb-btn" class="orb-btn" type="button" title="Ligar/desligar a escuta (Ctrl+Alt+J)" aria-label="Ligar ou desligar a escuta">
-        <div id="orb" class="orb" data-state="off"><span class="orb-ring"></span><span class="orb-core"></span></div>
+        <div id="orb" class="orb" data-state="off"><canvas id="orb-canvas"></canvas></div>
       </button>
       <div id="state-label" class="state-label">Escuta pausada</div>
       <div class="hero-actions">
@@ -117,6 +117,8 @@
     </footer>
   </section>
 
+  <script src="orb.js"></script>
+  <script src="voice-live.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

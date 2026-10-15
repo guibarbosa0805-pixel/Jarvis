@@ -6,6 +6,8 @@ let config = { server: '', token: '', name: '', paired: false, shortcut: 'Ctrl+A
 let busy = false;
 let currentAudio = null;
 let voiceOn = readPref('voice', '1') === '1';
+const orbView = createOrb($('orb-canvas'));
+createOrb($('setup-orb')).setState('listening');
 
 // ---------- Utilidades ----------
 
@@ -27,9 +29,8 @@ function writePref(key, value) {
 
 const URL_RE = /(https?:\/\/[^\s]+)/g;
 
-function addMessage(text, kind = 'jarvis') {
-  const el = document.createElement('div');
-  el.className = `msg ${kind}`;
+function fillMessage(el, text) {
+  el.replaceChildren();
   for (const part of String(text).split(URL_RE)) {
     if (/^https?:\/\//.test(part)) {
       const a = document.createElement('a');
@@ -42,6 +43,21 @@ function addMessage(text, kind = 'jarvis') {
       el.append(part);
     }
   }
+}
+
+/** Atualiza o texto de uma mensagem já na tela (transcrição chegando aos poucos). */
+function setMessageText(el, text) {
+  fillMessage(el, text);
+  lastLine = el.classList.contains('user') ? `Você: ${text}` : String(text);
+  publishState();
+  const list = $('messages');
+  list.scrollTop = list.scrollHeight;
+}
+
+function addMessage(text, kind = 'jarvis') {
+  const el = document.createElement('div');
+  el.className = `msg ${kind}`;
+  fillMessage(el, text);
   if (kind === 'jarvis' || kind === 'user') {
     lastLine = kind === 'user' ? `Você: ${text}` : String(text);
     publishState();
@@ -92,7 +108,7 @@ function setOrb(state) {
   const label = STATE_LABELS[state];
   $('state-label').textContent = typeof label === 'function' ? label() : label;
   $('state-label').classList.toggle('active', state !== 'off' && state !== 'listening');
-  if (state !== 'listening' && state !== 'recording') $('orb').style.setProperty('--level', 0);
+  orbView.setState(state);
   publishState();
 }
 
@@ -199,6 +215,109 @@ function setVoice(on) {
 
 $('voice-btn').addEventListener('click', () => setVoice(!voiceOn));
 $('mini-btn').addEventListener('click', () => window.jarvis.showMini());
+
+// ---------- Voz em tempo real ----------
+// A fala vai ao vivo pro servidor (Gemini Live) e a resposta toca enquanto chega. Se a
+// conexão falhar, o app volta sozinho pro caminho antigo (transcrever, responder, falar).
+
+const player = new PcmPlayer(24000);
+let liveReady = false;
+let liveBrokenUntil = 0;
+let liveErrors = 0;
+let liveTurn = null; // { userEl, replyEl, actions, completed, timer }
+let lastWarm = 0;
+
+const live = new LiveVoice({
+  onEvent: onLiveEvent,
+  onAudio: onLiveAudio,
+  onStatus: (ok) => {
+    liveReady = ok;
+    if (!ok && liveTurn) endLiveTurn();
+  },
+});
+
+const canUseLive = () => voiceOn && liveReady && Date.now() > liveBrokenUntil;
+const needsWakeWord = () => !inConversation() && !hasUserFocus();
+
+/** Abre a sessão do Gemini antes de a pessoa falar (economiza ~1 s na primeira resposta). */
+function warmLive() {
+  if (!canUseLive() || Date.now() - lastWarm < 60000) return;
+  lastWarm = Date.now();
+  live.send({ type: 'warm' });
+}
+
+function beginLiveTurn(userText) {
+  liveTurn = { userEl: userText ? addMessage(userText, 'user') : null, replyEl: null, actions: [], completed: false };
+  liveTurn.timer = setTimeout(() => {
+    addMessage('A resposta demorou demais. Tente de novo.', 'system error');
+    endLiveTurn();
+  }, 30000);
+  setOrb('thinking');
+}
+
+function onLiveAudio(buffer) {
+  if (!liveTurn) return; // resto de um turno já encerrado
+  if ($('orb').dataset.state !== 'speaking') {
+    setOrb('speaking');
+    window.jarvis.duckMusic(true);
+  }
+  player.enqueue(buffer);
+}
+
+function onLiveEvent(msg) {
+  if (msg.type === 'actions') {
+    if (liveTurn) liveTurn.actions.push(...msg.actions);
+    else window.jarvis.runActions(msg.actions);
+    return;
+  }
+  if (!liveTurn) return;
+  if (msg.type === 'input' && msg.text) {
+    if (liveTurn.userEl) setMessageText(liveTurn.userEl, msg.text);
+    else liveTurn.userEl = addMessage(msg.text, 'user');
+  } else if (msg.type === 'output' && msg.text) {
+    if (liveTurn.replyEl) setMessageText(liveTurn.replyEl, msg.text);
+    else liveTurn.replyEl = addMessage(msg.text, 'jarvis');
+  } else if (msg.type === 'turn-complete') {
+    liveErrors = 0;
+    if (msg.user && liveTurn.userEl) setMessageText(liveTurn.userEl, msg.user);
+    if (msg.reply && liveTurn.replyEl) setMessageText(liveTurn.replyEl, msg.reply);
+    else if (msg.reply) liveTurn.replyEl = addMessage(msg.reply, 'jarvis');
+    endLiveTurn();
+  } else if (msg.type === 'error') {
+    // Duas falhas seguidas: usa o caminho antigo por 5 minutos.
+    if (++liveErrors >= 2) liveBrokenUntil = Date.now() + 5 * 60 * 1000;
+    addMessage(msg.message || 'A conversa por voz falhou. Tente de novo.', 'system error');
+    endLiveTurn();
+  }
+}
+
+/** Fecha o turno: espera a fala terminar, solta as ações (ex: música) e volta a ouvir. */
+async function endLiveTurn() {
+  const turn = liveTurn;
+  if (!turn || turn.completed) return;
+  turn.completed = true;
+  clearTimeout(turn.timer);
+  await player.drained();
+  window.jarvis.duckMusic(false);
+  if (turn.actions.length) window.jarvis.runActions(turn.actions);
+  if (liveTurn === turn) liveTurn = null;
+  conversationUntil = performance.now() + CALL.conversationMs;
+  setBusy(false);
+  resumeListening();
+}
+
+// Orb acompanha a voz do Jarvis enquanto ele fala.
+(function followSpeech() {
+  if ($('orb').dataset.state === 'speaking' && player.playing) {
+    const level = player.level();
+    orbView.setLevel(level);
+    publishLevel(level);
+  }
+  requestAnimationFrame(followSpeech);
+})();
+
+window.addEventListener('focus', warmLive);
+window.jarvis.on('mini-focus', (focused) => focused && warmLive());
 
 // ---------- Conexão com o WhatsApp ----------
 
@@ -316,6 +435,7 @@ $('server').addEventListener('input', () => {
 
 function showSetup(error = '') {
   endCall();
+  live.close();
   document.body.classList.add('setup-mode');
   $('chat').hidden = true;
   $('setup').hidden = false;
@@ -352,6 +472,7 @@ function showChat() {
   $('hint').textContent = `${config.shortcut} liga/desliga a escuta`;
   showName(config.name);
   syncName();
+  live.connect(config.server, config.token);
   // O app sempre abre ouvindo (depois do histórico, pra um aviso de erro não ser apagado).
   loadHistory().finally(() => startCall());
 }
@@ -383,6 +504,11 @@ async function sendText(text) {
   if (busy || !text) return;
   setBusy(true);
   if (call) call.state = 'processing';
+  if (canUseLive()) {
+    beginLiveTurn(text);
+    live.send({ type: 'text', text });
+    return;
+  }
   addMessage(text, 'user');
   setOrb('thinking');
   try {
@@ -493,18 +619,20 @@ function callTick() {
   const voiced = rms > threshold;
 
   if (call.state === 'listening') {
-    $('orb').style.setProperty('--level', Math.min(1, rms * 6).toFixed(3));
+    orbView.setLevel(Math.min(1, rms * 6));
     publishLevel(Math.min(1, rms * 6));
     call.floor = call.floor * 0.97 + rms * 0.03;
     call.loud = voiced ? call.loud + 1 : 0;
     if (call.loud >= 3) startUtterance(now);
   } else if (call.state === 'recording') {
-    $('orb').style.setProperty('--level', Math.min(1, rms * 8).toFixed(3));
+    orbView.setLevel(Math.min(1, rms * 8));
     publishLevel(Math.min(1, rms * 8));
     if (voiced) {
       call.lastVoiceAt = now;
       call.voicedMs += CALL.tickMs;
     }
+    // Já é fala de verdade (não um estalo): começa a mandar ao vivo, com a folga gravada antes.
+    if (call.live && !call.liveStarted && call.voicedMs >= CALL.minVoiceMs) startLiveUtterance();
     if (now - call.lastVoiceAt > CALL.silenceMs || now - call.startedAt > CALL.maxUtteranceMs) finishUtterance();
   }
 }
@@ -517,13 +645,31 @@ function startUtterance(now) {
   call.utter = call.ring;
   call.ring = [];
   call.ringSamples = 0;
+  // Conversando com o app (janela em foco ou conversa em andamento): vai ao vivo, sem precisar de "Jarvis".
+  call.live = canUseLive() && !needsWakeWord();
+  call.liveStarted = false;
   currentAudio?.pause();
   setOrb('recording');
+}
+
+function startLiveUtterance() {
+  call.liveStarted = true;
+  live.send({ type: 'start' });
+  const rate = call.ctx.sampleRate;
+  for (const chunk of call.utter) live.sendAudio(toPcm16k(chunk, rate));
 }
 
 function finishUtterance() {
   if (!call) return;
   call.state = 'processing';
+  if (call.liveStarted) {
+    // Fim da fala: o Gemini começa a responder na hora.
+    live.send({ type: 'end' });
+    setBusy(true);
+    beginLiveTurn(null);
+    call.utter = [];
+    return;
+  }
   const samples = call.utter;
   const rate = call.ctx.sampleRate;
   call.utter = [];
@@ -535,6 +681,7 @@ function onSamples(chunk) {
   if (!call) return;
   if (call.state === 'recording') {
     call.utter.push(chunk);
+    if (call.liveStarted) live.sendAudio(toPcm16k(chunk, call.ctx.sampleRate));
   } else if (call.state === 'listening') {
     call.ring.push(chunk);
     call.ringSamples += chunk.length;
@@ -594,10 +741,17 @@ async function onUtteranceEnd(samples, rate) {
   try {
     // Com a janela em foco a pessoa está falando com o app: não precisa dizer "Jarvis".
     // Em segundo plano (escondido na bandeja ou atrás de outras janelas), só responde se chamarem.
-    const needsWakeWord = !inConversation() && !hasUserFocus();
-    const params = [`call=1`, `wake=${needsWakeWord ? 1 : 0}`];
+    const params = [`call=1`, `wake=${needsWakeWord() ? 1 : 0}`];
     if (!voiceOn) params.push('voice=0');
+    const viaLive = canUseLive();
+    if (viaLive) params.push('transcribeOnly=1');
     const body = await api(`/audio?${params.join('&')}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob });
+    if (!body.ignored && viaLive && !body.text && body.transcript) {
+      // Ouviu "Jarvis": a resposta vem pela voz em tempo real (busy segue até o turno acabar).
+      beginLiveTurn(body.transcript);
+      live.send({ type: 'text', text: body.transcript });
+      return;
+    }
     if (!body.ignored) await handleReply(body);
     else if (body.transcript && document.visibilityState === 'visible') {
       // Descartado por não ter "Jarvis": mostra o que ouviu, pra não parecer travado.
@@ -605,7 +759,8 @@ async function onUtteranceEnd(samples, rate) {
     }
   } catch (err) {
     if (err.message !== 'unauthorized') addMessage(friendly(err), 'system error');
-  } finally {
+  }
+  if (!liveTurn) {
     setBusy(false);
     resumeListening();
   }

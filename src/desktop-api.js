@@ -169,6 +169,8 @@ export function createDesktopRouter() {
       if (req.query.wake === '1' && !hasWakeWord(transcript) && !isGreeting(transcript)) {
         return res.json({ transcript, ignored: true, actions: [] });
       }
+      // Só a transcrição (o app responde pela conversa por voz em tempo real).
+      if (req.query.transcribeOnly === '1') return res.json({ transcript, ignored: false, actions: [] });
       return reply(req, res, transcript, { transcript });
     } catch (err) {
       console.error(`${TAG} [${req.person.id}] Erro ao processar áudio do app:`, err?.message || err);

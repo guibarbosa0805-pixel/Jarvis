@@ -20,6 +20,7 @@ import { startJarvisConnection, stopJarvisConnection, forgetBrain } from './jarv
 import { startPeopleScheduler } from './scheduler-people.js';
 import { createDesktopRouter } from './desktop-api.js';
 import { revokeTokensOf } from './desktop.js';
+import { attachLiveServer } from './live.js';
 import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending, migrateDigestDefaults } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -373,13 +374,16 @@ app.delete('/api/instances/:name', (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, HOST, () => {
+const httpServer = app.listen(PORT, HOST, () => {
   console.log(
     isLoopback(HOST)
       ? `[painel] Rodando em http://localhost:${PORT} (só acessível desta máquina)`
       : `[painel] Rodando em http://${HOST}:${PORT} (acessível pela rede, protegido por senha)`,
   );
 });
+
+// Conversa por voz em tempo real do app do computador (WebSocket no mesmo endereço).
+attachLiveServer(httpServer);
 
 // JARVIS_DISABLED=1 sobe só o painel, sem WhatsApp nem lembretes (útil pra testar
 // a interface sem derrubar a sessão que está rodando em outro lugar).

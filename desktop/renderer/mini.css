@@ -44,7 +44,8 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .orb-btn { border-radius: 50%; padding: 2px; flex-shrink: 0; }
-.orb { --level: 0; position: relative; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; }
+.orb { position: relative; width: 64px; height: 64px; }
+#orb-canvas { width: 100%; height: 100%; display: block; }
 .orb-core {
   width: 62%; height: 62%; border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #9db4ff 0%, var(--accent) 45%, #26398f 100%);

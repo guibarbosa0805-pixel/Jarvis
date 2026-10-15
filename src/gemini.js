@@ -16,7 +16,8 @@ const ttsExhausted = new Map();
 const ttsCache = new Map();
 const TTS_CACHE_MAX = 60;
 
-const tools = [
+// Exportados pra sessão de voz em tempo real (live.js) usar as mesmas funções e instruções.
+export const tools = [
   {
     functionDeclarations: [
       {
@@ -180,7 +181,7 @@ function profileBlock(profile) {
   return `\n\nO que você já sabe sobre essa pessoa (use naturalmente, sem recitar):\n${lines.join('\n')}`;
 }
 
-function buildSystemInstruction(displayName, channelLabel, profile) {
+export function buildSystemInstruction(displayName, channelLabel, profile) {
   return `Você é o Jarvis, secretário(a) pessoal particular de ${displayName}. Vocês conversam ${channelLabel}, só vocês dois, pra organizar a vida dele(a).${profileBlock(profile)}
 
 Seu papel:
@@ -242,7 +243,7 @@ function sendToDesktop({ personId, flags }, action) {
   return personId ? pushToDesktop(personId, action) > 0 : false;
 }
 
-async function runFunction({ store, memory, flags, personId }, name, args) {
+export async function runFunction({ store, memory, flags, personId }, name, args) {
   switch (name) {
     case 'play_music': {
       const query = String(args.query || '').trim();
@@ -508,6 +509,13 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
         if (channel !== 'desktop' && personId) pushToDesktop(personId, { type: 'chat', user: text, reply: result.text });
         return result;
       });
+      queue = turn.catch(() => {});
+      return turn;
+    },
+
+    /** Registra no histórico um turno feito fora deste chat (ex: conversa por voz em tempo real). */
+    recordTurn(userText, replyText) {
+      const turn = queue.then(() => recordExchange(userText, replyText));
       queue = turn.catch(() => {});
       return turn;
     },

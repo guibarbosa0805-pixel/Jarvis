@@ -118,7 +118,11 @@ input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
 
 /* ---------- Orb (estado da voz) ---------- */
 .hero { display: flex; flex-direction: column; align-items: center; padding: 6px 16px 10px; gap: 6px; flex-shrink: 0; }
-.orb-btn { border-radius: 50%; padding: 6px; }
+.orb-btn { border-radius: 50%; padding: 0; }
+.orb-btn:hover #orb-canvas { filter: brightness(1.12); }
+#orb.orb { width: 172px; height: 172px; }
+#orb-canvas, .setup-orb { width: 100%; height: 100%; display: block; }
+.setup-orb { width: 132px; height: 132px; }
 .orb {
   --level: 0;
   position: relative; width: 112px; height: 112px; border-radius: 50%;

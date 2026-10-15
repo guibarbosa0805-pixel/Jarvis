@@ -9,7 +9,7 @@
 <body>
   <div id="mini" class="mini">
     <button id="orb-btn" class="orb-btn" type="button" title="Ligar/desligar a escuta" aria-label="Ligar ou desligar a escuta">
-      <div id="orb" class="orb" data-state="off"><span class="orb-ring"></span><span class="orb-core"></span></div>
+      <div id="orb" class="orb" data-state="off"><canvas id="orb-canvas"></canvas></div>
     </button>
     <div class="info">
       <div class="top">
@@ -28,6 +28,7 @@
       </button>
     </div>
   </div>
+  <script src="orb.js"></script>
   <script src="mini.js"></script>
 </body>
 </html>
