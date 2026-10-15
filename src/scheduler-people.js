@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { listPeople, updatePerson } from './people.js';
 import { createStore } from './store.js';
 import { formatDateShort, formatTime, formatDateTimeFull } from './format.js';
-import { sendToPerson } from './jarvis.js';
+import { sendProactive } from './jarvis.js';
 import { groupAgenda } from './agenda.js';
 import { pushToDesktop } from './desktop.js';
 
@@ -62,7 +62,7 @@ async function maybeSendDigest(person, store, now) {
   if (sinceTarget < 0 || sinceTarget > DIGEST_WINDOW_MIN) return;
 
   try {
-    await sendToPerson(person.jid, buildDigest(person, store, now));
+    await sendProactive(person, buildDigest(person, store, now), { remember: true });
     updatePerson(person.id, { lastDigestDate: dateKey(now) });
   } catch (err) {
     console.error(`${TAG} [${person.id}] Falha ao enviar resumo matinal:`, err.message);
@@ -80,7 +80,7 @@ export function startPeopleScheduler() {
         try {
           const lines = [`⏰ Lembrete: faltam ${minutes} min!`, '', `📅 ${task.title}`, `📆 ${formatDateShort(task.dueAt)} às ${formatTime(task.dueAt)}`];
           if (task.link) lines.push(`🔗 Link: ${task.link}`);
-          await sendToPerson(person.jid, lines.join('\n'));
+          await sendProactive(person, lines.join('\n'));
           store.markLeadsSent(task.id, offsets);
           pushToDesktop(person.id, { type: 'notify', title: `Faltam ${minutes} min`, body: task.title });
         } catch (err) {
@@ -92,7 +92,7 @@ export function startPeopleScheduler() {
         try {
           const lines = ['Lembrete, AGORA!:', task.title, '', 'Data e hora:', `📅 ${formatDateTimeFull(task.dueAt)}`];
           if (task.link) lines.push('', `🔗 ${task.link}`);
-          await sendToPerson(person.jid, lines.join('\n'));
+          await sendProactive(person, lines.join('\n'));
           store.markDueSent(task.id);
           pushToDesktop(person.id, { type: 'notify', title: 'Agora', body: task.title });
         } catch (err) {

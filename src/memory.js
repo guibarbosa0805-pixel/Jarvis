@@ -39,6 +39,8 @@ export function readableMessages(contents, limit = 30) {
       .join('')
       .replace(TURN_PREFIX, '')
       .trim();
+    // Marcador de mensagem automática do Jarvis (resumo da manhã): não é fala da pessoa.
+    if (c.role === 'user' && text.startsWith('[Mensagem automática')) continue;
     if (text) out.push({ role: c.role === 'model' ? 'jarvis' : 'user', text });
   }
   return out.slice(-limit);

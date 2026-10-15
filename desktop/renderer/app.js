@@ -600,6 +600,30 @@ function showNowPlaying(info) {
 }
 
 window.jarvis.on('now-playing', showNowPlaying);
+
+// Música de arquivo local (ex: a do bom dia) toca aqui mesmo, sem YouTube.
+let localMusic = null;
+let localVolume = 1;
+
+window.jarvis.on('local-music', ({ cmd, url, on }) => {
+  if (cmd === 'play') {
+    localMusic?.pause();
+    localMusic = new Audio(url);
+    localMusic.volume = localVolume;
+    localMusic.onended = () => window.jarvis.musicControl('stop');
+    localMusic.play().catch(() => addMessage('Não consegui tocar o arquivo de música.', 'system error'));
+    return;
+  }
+  if (!localMusic) return;
+  if (cmd === 'pause') localMusic.pause();
+  else if (cmd === 'resume') localMusic.play().catch(() => {});
+  else if (cmd === 'stop') {
+    localMusic.pause();
+    localMusic = null;
+  } else if (cmd === 'volume_up') localMusic.volume = localVolume = Math.min(1, localVolume + 0.2);
+  else if (cmd === 'volume_down') localMusic.volume = localVolume = Math.max(0, localVolume - 0.2);
+  else if (cmd === 'duck') localMusic.volume = on ? Math.min(localVolume, 0.15) : localVolume;
+});
 $('player-toggle').addEventListener('click', () => window.jarvis.musicControl(paused ? 'resume' : 'pause'));
 $('player-stop').addEventListener('click', () => window.jarvis.musicControl('stop'));
 $('player-show').addEventListener('click', () => window.jarvis.showPlayer());

@@ -1,6 +1,7 @@
-const { app, BrowserWindow, Tray, Menu, Notification, globalShortcut, ipcMain, nativeImage, session, shell, safeStorage } = require('electron');
-const { readFileSync, writeFileSync, existsSync, mkdirSync } = require('node:fs');
+const { app, BrowserWindow, Tray, Menu, Notification, dialog, globalShortcut, ipcMain, nativeImage, session, shell, safeStorage } = require('electron');
+const { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { spawn, execFile } = require('node:child_process');
 
 const SHORTCUT = 'Control+Alt+J';
@@ -32,7 +33,14 @@ function loadConfig() {
   }
   // Versões antigas abriam a música no navegador; agora o padrão é tocar dentro do app.
   const musicTarget = (raw.version || 1) < CONFIG_VERSION ? 'app' : raw.musicTarget || 'app';
-  return { server: raw.server || '', token, name: raw.name || '', musicTarget, autoStartSet: !!raw.autoStartSet };
+  return {
+    server: raw.server || '',
+    token,
+    name: raw.name || '',
+    musicTarget,
+    autoStartSet: !!raw.autoStartSet,
+    morningMusic: raw.morningMusic && existsSync(raw.morningMusic) ? raw.morningMusic : '',
+  };
 }
 
 function saveConfig() {
@@ -41,7 +49,16 @@ function saveConfig() {
   const token = config.token ? (encrypted ? safeStorage.encryptString(config.token).toString('base64') : config.token) : '';
   writeFileSync(
     configFile(),
-    JSON.stringify({ version: CONFIG_VERSION, server: config.server, name: config.name, token, encrypted, musicTarget: config.musicTarget, autoStartSet: config.autoStartSet }),
+    JSON.stringify({
+      version: CONFIG_VERSION,
+      server: config.server,
+      name: config.name,
+      token,
+      encrypted,
+      musicTarget: config.musicTarget,
+      autoStartSet: config.autoStartSet,
+      morningMusic: config.morningMusic,
+    }),
     'utf8',
   );
 }
@@ -91,6 +108,11 @@ function showWindow() {
 function buildTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   tray.setToolTip('Jarvis');
+  tray.on('click', showWindow);
+  refreshTrayMenu();
+}
+
+function refreshTrayMenu() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Abrir Jarvis', click: showWindow },
@@ -114,12 +136,45 @@ function buildTray() {
           },
         })),
       },
+      {
+        label: 'Música do bom dia',
+        submenu: [
+          { label: config.morningMusic ? `Arquivo: ${path.basename(config.morningMusic)}` : 'Usando a música do YouTube', enabled: false },
+          { label: 'Escolher arquivo de música...', click: chooseMorningMusic },
+          { label: 'Usar a música do YouTube', enabled: !!config.morningMusic, click: () => setMorningMusic('') },
+        ],
+      },
       { label: 'Desconectar este computador', click: disconnect },
       { type: 'separator' },
       { label: 'Sair', click: () => { quitting = true; app.quit(); } },
     ]),
   );
-  tray.on('click', showWindow);
+}
+
+// ---------- Música do bom dia (arquivo local) ----------
+// Um arquivo de música da pessoa toca no lugar do YouTube na rotina de bom dia: na hora,
+// sem anúncio e sem internet. O arquivo é copiado pra pasta do app (fica só neste PC).
+
+const musicDir = () => path.join(app.getPath('userData'), 'musicas');
+
+function setMorningMusic(file) {
+  config.morningMusic = file;
+  saveConfig();
+  refreshTrayMenu();
+}
+
+async function chooseMorningMusic() {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Música do bom dia',
+    properties: ['openFile'],
+    filters: [{ name: 'Música', extensions: ['mp3', 'm4a', 'aac', 'ogg', 'wav', 'flac'] }],
+  });
+  if (canceled || !filePaths[0]) return;
+  mkdirSync(musicDir(), { recursive: true });
+  const target = path.join(musicDir(), `bom-dia${path.extname(filePaths[0]).toLowerCase()}`);
+  copyFileSync(filePaths[0], target);
+  setMorningMusic(target);
+  notifyRenderer('notice', `Música do bom dia definida: ${path.basename(filePaths[0])}.`);
 }
 
 function toggleListening() {
@@ -213,6 +268,7 @@ function playInApp({ videoId, title }) {
 }
 
 function stopMusic() {
+  if (nowPlaying?.source === 'local') notifyRenderer('local-music', { cmd: 'stop' });
   clearInterval(watchTimer);
   if (player && !player.isDestroyed()) player.webContents.loadURL('about:blank');
   setNowPlaying(null);
@@ -240,7 +296,17 @@ function pressMediaKey(vk, times = 1) {
   execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true }, () => {});
 }
 
+/** Arquivo local toca na janela principal (que fica sempre carregada, mesmo escondida). */
+function playLocal(file, title) {
+  stopMusic();
+  notifyRenderer('local-music', { cmd: 'play', url: pathToFileURL(file).href });
+  setNowPlaying({ title: title || path.basename(file, path.extname(file)), paused: false, source: 'local' });
+}
+
 function playMusic(action) {
+  if (action.routine === 'goodMorning' && config.morningMusic && existsSync(config.morningMusic)) {
+    return playLocal(config.morningMusic, action.title);
+  }
   if (config.musicTarget === 'app') return playInApp(action);
   stopMusic();
   const url = `https://music.youtube.com/watch?v=${encodeURIComponent(action.videoId)}`;
@@ -251,6 +317,12 @@ function playMusic(action) {
 }
 
 async function controlMusic(action) {
+  if (nowPlaying?.source === 'local') {
+    if (action === 'stop') return stopMusic();
+    notifyRenderer('local-music', { cmd: action });
+    if (action === 'pause' || action === 'resume') setNowPlaying({ ...nowPlaying, paused: action === 'pause' });
+    return;
+  }
   if (nowPlaying?.source === 'browser') {
     const vk = MEDIA_KEYS[action];
     if (vk) pressMediaKey(vk, action.startsWith('volume') ? 5 : 1);
@@ -279,6 +351,7 @@ async function controlMusic(action) {
 
 /** Abaixa a música enquanto o Jarvis fala ou ouve, e devolve o volume depois. */
 async function duckMusic(on) {
+  if (nowPlaying?.source === 'local') return notifyRenderer('local-music', { cmd: 'duck', on });
   if (nowPlaying?.source !== 'app') return;
   await runInPlayer(`(()=>{const v=${VIDEO}; if(!v) return; if(${on}){ if(window.__jv==null) window.__jv=v.volume; v.volume=Math.min(v.volume,0.15);} else if(window.__jv!=null){ v.volume=window.__jv; window.__jv=null; }})()`);
 }

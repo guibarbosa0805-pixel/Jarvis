@@ -118,6 +118,23 @@ export async function sendToPerson(jid, text) {
 }
 
 /**
+ * Mensagem que o Jarvis manda por conta própria (resumo, lembrete): vai pro WhatsApp, aparece
+ * também no app do computador e, se `remember`, entra no histórico da conversa.
+ */
+export async function sendProactive(person, text, { remember = false } = {}) {
+  await sendToPerson(person.jid, text);
+  pushToDesktop(person.id, { type: 'chat', reply: text });
+  if (remember) await getBrain(person).recordProactive(text).catch(() => {});
+}
+
+/** Copia no WhatsApp uma troca feita no app do computador (a não ser que a pessoa tenha desligado). */
+export async function mirrorDesktopExchange(person, userText, replyText) {
+  if (person.mirrorDesktop === false || !sock) return;
+  const quoted = userText.length > 300 ? `${userText.slice(0, 300)}...` : userText;
+  await sendToPerson(person.jid, `💻 _No computador_\n*Você:* ${quoted}\n\n${replyText}`);
+}
+
+/**
  * Responde por voz quando a pessoa mandou áudio ou pediu áudio; cai pra texto se a
  * resposta tiver link, for longa demais ou o TTS falhar (cota, instabilidade).
  */

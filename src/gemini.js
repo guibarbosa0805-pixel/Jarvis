@@ -83,6 +83,16 @@ const tools = [
         },
       },
       {
+        name: 'set_desktop_mirror',
+        description:
+          'Liga ou desliga a cópia, no WhatsApp, das conversas feitas no app do computador. Use quando a pessoa pedir pra parar (ou voltar) de mandar no WhatsApp o que ela fala com você no computador.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: { enabled: { type: Type.BOOLEAN, description: 'true = copiar para o WhatsApp; false = não copiar.' } },
+          required: ['enabled'],
+        },
+      },
+      {
         name: 'connect_desktop_app',
         description:
           'Gera um código de 6 dígitos (vale 10 minutos) para a pessoa conectar o app do Jarvis no computador dela. Use sempre que a pessoa falar em conectar/instalar/usar/vincular o Jarvis (ou "meu computador", "meu PC", "o app") no computador — mesmo sem dizer "Jarvis". Não pergunte o objetivo: gere o código direto.',
@@ -188,6 +198,7 @@ Seu papel:
 - Voz: você consegue responder em áudio. Se ${displayName} mandar um áudio, a resposta já vai por voz automaticamente; se pedir por texto pra você responder/falar em áudio, chame reply_with_voice. Em resposta por voz, escreva em frases curtas e naturais de fala, sem listas longas. Nunca diga que não consegue enviar áudio.
 - Rotina de bom dia: se ${displayName} pedir pra configurar o que acontece quando ela(e) manda "bom dia" (ex: responder por voz com uma frase e já tocar uma música), chame set_good_morning_routine com a frase (corrigida e bem pontuada) e a busca da música, e confirme. A música só toca se o app do Jarvis estiver aberto no computador; avise isso na confirmação. Depois de configurada, o "bom dia" sozinho dispara a rotina automaticamente.
 - Música: você toca músicas no computador da pessoa, quando o app do Jarvis está aberto lá. Se pedirem música, artista ou um som pra ambientar (ex: "toca AC/DC", "põe um som pra focar"), chame play_music com a busca e responda curto e com bom humor dizendo o que está tocando (use o "title" do resultado). Para pausar, continuar, parar ou mudar o volume, use control_music. Se o resultado de play_music vier com playing_on null (nenhum PC conectado), explique que o app precisa estar aberto no computador e mande o "url" pra pessoa abrir. Se falhar, ofereça os links de busca (search_links).
+- WhatsApp e computador são a mesma conversa: o que é dito no app aparece copiado no WhatsApp (dá pra desligar com set_desktop_mirror), e o resumo da manhã e os lembretes aparecem nos dois. Mensagens "[Mensagem automática: ...]" no histórico são coisas que você mesmo mandou sozinho (ex: o resumo das 07:30) — se a pessoa responder sobre elas, continue de onde parou.
 - App do computador: se ${displayName} pedir pra usar/conectar o Jarvis no PC ou computador (inclusive frases curtas como "conectar meu computador" ou "quero usar no PC" — aqui "conectar o computador" sempre significa o app do Jarvis, nunca TV, monitor ou rede), chame connect_desktop_app sem fazer perguntas e passe o código de 6 dígitos (vale pelo tempo indicado em expiresInMinutes), explicando que é só abrir o app do Jarvis no computador e digitar o código. Mensagens com "[Canal: chamada de voz no app do Jarvis]" são uma ligação: a pessoa fala com você e ouve a resposta (a transcrição pode ter erros de ouvido, então interprete com bom senso). Responda como numa ligação telefônica: de 1 a 3 frases curtas e naturais, sem listas, emojis, asteriscos, números de item ou links (se precisar de um link, diga que deixou escrito na tela e inclua o link no texto). Mensagens com "[Canal: app do Jarvis no computador]" vêm do app, que lê suas respostas em voz alta: responda em texto simples (sem asteriscos nem emojis), curto e natural de ouvir — no máximo 3 ou 4 frases; se for uma lista (ex: agenda), diga os itens em frases corridas.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
@@ -262,6 +273,11 @@ async function runFunction({ store, memory, flags, personId }, name, args) {
       if (!reply) return { ok: false, error: 'Preciso da frase que devo falar.' };
       updatePerson(personId, { goodMorning: { reply, music: String(args.music || '').trim() } });
       return { ok: true, saved: true };
+    }
+    case 'set_desktop_mirror': {
+      if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
+      updatePerson(personId, { mirrorDesktop: !!args.enabled });
+      return { ok: true, enabled: !!args.enabled };
     }
     case 'connect_desktop_app': {
       if (flags.channel === 'desktop') return { ok: true, already_connected: true };
@@ -383,6 +399,10 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
     chat = makeChat(memory.loadHistory());
   }
 
+  // Mensagens que o Jarvis manda por conta própria (resumo da manhã) entram no histórico,
+  // pra ele saber o que já disse se a pessoa responder "e os atrasados?".
+  const PROACTIVE_MARK = '[Mensagem automática: o Jarvis enviou isto por conta própria, sem a pessoa pedir]';
+
   // "Bom dia" sozinho dispara a rotina configurada (voz + música), sem passar pelo modelo.
   async function goodMorningRoutine(text, channel) {
     if (!personId || !isGreeting(text)) return null;
@@ -398,7 +418,8 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
       let action = null;
       try {
         const track = await searchMusic(routine.music);
-        if (track) action = { type: 'play_music', videoId: track.videoId, title: track.title, url: track.url, alternatives: track.alternatives };
+        // routine: o app pode trocar por um arquivo de música local escolhido pra rotina.
+        if (track) action = { type: 'play_music', routine: 'goodMorning', videoId: track.videoId, title: track.title, url: track.url, alternatives: track.alternatives };
       } catch {
         // sem música desta vez
       }
@@ -487,6 +508,13 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
         if (channel !== 'desktop' && personId) pushToDesktop(personId, { type: 'chat', user: text, reply: result.text });
         return result;
       });
+      queue = turn.catch(() => {});
+      return turn;
+    },
+
+    /** Registra no histórico uma mensagem que o Jarvis mandou sozinho (na fila, como um turno). */
+    recordProactive(text) {
+      const turn = queue.then(() => recordExchange(PROACTIVE_MARK, text));
       queue = turn.catch(() => {});
       return turn;
     },

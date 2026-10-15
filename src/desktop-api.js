@@ -1,6 +1,6 @@
 import express from 'express';
 import { randomBytes } from 'node:crypto';
-import { getBrain, getJarvisNumber } from './jarvis.js';
+import { getBrain, getJarvisNumber, mirrorDesktopExchange } from './jarvis.js';
 import { findPersonById } from './people.js';
 import { createStore } from './store.js';
 import { createMemory, readableMessages } from './memory.js';
@@ -139,6 +139,10 @@ export function createDesktopRouter() {
       // No app a voz é o padrão: só não fala se o app pedir texto (voice=0).
       if (req.query.voice !== '0') body.speechId = startSpeech(person, brain, result.text);
       res.json(body);
+      // Mesma conversa nos dois lugares: a troca feita no computador fica registrada no WhatsApp.
+      mirrorDesktopExchange(person, text, result.text).catch((err) =>
+        console.error(`${TAG} [${person.id}] Falha ao copiar a conversa do app no WhatsApp:`, err?.message || err),
+      );
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro no app do computador:`, err?.message || err);
       res.status(502).json({ error: friendlyError(err) });

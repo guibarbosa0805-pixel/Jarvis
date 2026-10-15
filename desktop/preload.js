@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-const EVENTS = ['toggle-record', 'now-playing', 'connection', 'config', 'notice', 'chat'];
+const EVENTS = ['toggle-record', 'now-playing', 'connection', 'config', 'notice', 'chat', 'local-music'];
 
 contextBridge.exposeInMainWorld('jarvis', {
   getConfig: () => ipcRenderer.invoke('config:get'),
