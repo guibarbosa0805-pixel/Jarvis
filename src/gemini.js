@@ -2,6 +2,9 @@ import { GoogleGenAI, Type, createPartFromFunctionResponse, createUserContent, c
 import * as defaultStore from './store.js';
 import { formatDateShort, formatTime } from './format.js';
 import { buildBriefingData } from './briefing.js';
+import { speakableText, wavToOggOpus, MAX_SPOKEN_CHARS } from './voice.js';
+
+const VOICE_STYLE = 'Fale em português do Brasil, com voz calma, elegante e levemente bem-humorada, como um mordomo digital: ';
 
 const tools = [
   {
@@ -30,6 +33,12 @@ const tools = [
             add_notes: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Fatos/preferências curtos e duráveis.' },
           },
         },
+      },
+      {
+        name: 'reply_with_voice',
+        description:
+          'Faz sua resposta desta vez ser enviada como mensagem de voz (áudio). Use quando a pessoa pedir pra você responder/falar em áudio ou por voz. Depois de chamar, escreva normalmente a resposta (ela será falada em voz alta).',
+        parameters: { type: Type.OBJECT, properties: {} },
       },
       {
         name: 'create_reminder',
@@ -128,6 +137,8 @@ Seu papel:
 - Briefing do dia: quando ${displayName} abrir a conversa com "bom dia"/"boa tarde"/"oi" logo de manhã, ou pedir resumo, panorama, briefing ou "o que tenho hoje", chame get_briefing e monte uma mensagem curta com: saudação com o nome; Agenda de hoje (horário e título); Atrasados (só se houver, os mais recentes); Clima (só se vier, em uma linha); Notícias (até 3 manchetes de interesse, só se vierem); e Prioridades (até 3, escolhidas só entre itens reais da agenda e dos atrasados — nunca invente tarefas de preparação; com um único compromisso, apenas cite-o). Se não houver nada que exija atenção, diga isso de forma tranquila (ex: "nada pede sua atenção agora"). Se faltar a cidade (weather_unavailable_reason "cidade não informada"), peça a cidade no fim do briefing e, quando responder, guarde com update_profile. Se o clima falhou mas a cidade existe, diga em uma frase que não conseguiu a previsão agora. Se news_unavailable_reason for "a pessoa ainda não disse quais temas...", não coloque notícias e pergunte, uma vez, que temas ela quer acompanhar (guarde com update_profile).
 - Se ${displayName} pedir pra esquecer/apagar o que você sabe sobre ela(e), use clear_memory e confirme que apagou (tarefas e lembretes continuam).
 - Memória: quando ${displayName} contar algo durável sobre si (cidade, rotina, preferências, temas de interesse, onde trabalha), guarde com update_profile sem avisar nem pedir permissão. Nunca guarde senhas, documentos, dados de saúde ou financeiros.
+- Voz: você consegue responder em áudio. Se ${displayName} mandar um áudio, a resposta já vai por voz automaticamente; se pedir por texto pra você responder/falar em áudio, chame reply_with_voice. Em resposta por voz, escreva em frases curtas e naturais de fala, sem listas longas. Nunca diga que não consegue enviar áudio.
+- Música: você ainda não toca músicas por conta própria. Se pedirem uma música/artista (ex: "toca AC/DC"), seja honesto: diga que não toca direto, mas com bom humor ofereça o link de busca (YouTube Music/Spotify) com a música pedida: https://music.youtube.com/search?q=<termos+da+busca> ou https://open.spotify.com/search/<termos%20da%20busca>.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
 Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
@@ -158,6 +169,9 @@ Limites de comportamento (sempre, sem exceção):
 
 async function runFunction({ store, memory, flags }, name, args) {
   switch (name) {
+    case 'reply_with_voice':
+      flags.voice = true;
+      return { ok: true };
     case 'clear_memory': {
       if (!memory) return { ok: false, error: 'Memória indisponível nesta conversa.' };
       memory.clearAll();
@@ -228,7 +242,7 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
   let chat = makeChat(restored);
 
   async function runTurn(text, image) {
-    const flags = { wipe: false };
+    const flags = { wipe: false, voice: false };
     const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
     const augmented = `[Data/hora atual: ${now}]\n${text}`;
     const message = image ? [augmented, createPartFromBase64(image.data, image.mimeType)] : augmented;
@@ -253,10 +267,33 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
       memory?.saveHistory(chat.getHistory(true));
     }
     restoredPending = false;
+    voiceRequested = flags.voice;
     return response.text?.trim() || 'Ok.';
   }
 
+  // Virou true se, no último turno, a pessoa pediu resposta em áudio (tool reply_with_voice).
+  let voiceRequested = false;
+
   return {
+    wantsVoice: () => voiceRequested,
+
+    /** Fala o texto com o Gemini TTS; devolve áudio OGG/Opus pronto pra mensagem de voz do WhatsApp. */
+    async speak(text) {
+      const spoken = speakableText(text).slice(0, MAX_SPOKEN_CHARS);
+      if (!spoken) return null;
+      const response = await withRetry(() => ai.models.generateContent({
+        model: process.env.GEMINI_TTS_MODEL || 'gemini-3.8-flash-lite-tts',
+        contents: [{ parts: [{ text: `${VOICE_STYLE}${spoken}` }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.JARVIS_VOICE || 'Charon' } } },
+        },
+      }));
+      const inline = response.candidates?.[0]?.content?.parts?.find((p) => p.inlineData)?.inlineData;
+      if (!inline?.data) throw new Error('TTS não devolveu áudio.');
+      return wavToOggOpus(Buffer.from(inline.data, 'base64'), inline.mimeType);
+    },
+
     async handleIncomingMessage(text, image) {
       try {
         return await runTurn(text, image);

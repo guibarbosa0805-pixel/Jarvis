@@ -16,6 +16,7 @@ import { writeStatus } from './status.js';
 import { createStore } from './store.js';
 import { createBrain } from './gemini.js';
 import { createMemory } from './memory.js';
+import { hasLink, MAX_SPOKEN_CHARS } from './voice.js';
 import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, updatePerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -104,6 +105,26 @@ export async function sendToPerson(jid, text) {
   if (!sock) throw new Error('Jarvis não está conectado.');
   const whatsappText = toWhatsappMarkdown(text);
   return sock.sendMessage(jid, { text: `${JARVIS_LABEL} ${whatsappText}` });
+}
+
+/**
+ * Responde por voz quando a pessoa mandou áudio ou pediu áudio; cai pra texto se a
+ * resposta tiver link, for longa demais ou o TTS falhar (cota, instabilidade).
+ */
+async function deliverReply(person, brain, reply, { preferVoice = false } = {}) {
+  const wantVoice = preferVoice || brain.wantsVoice();
+  if (wantVoice && !hasLink(reply) && reply.length <= MAX_SPOKEN_CHARS) {
+    try {
+      const ogg = await withTimeout(brain.speak(reply), MEDIA_TIMEOUT_MS, 'Tempo esgotado gerando a voz');
+      if (ogg) {
+        await sock.sendMessage(person.jid, { audio: ogg, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+        return;
+      }
+    } catch (err) {
+      console.error(`${TAG} [${person.id}] Voz indisponível, respondendo em texto:`, err?.message || err);
+    }
+  }
+  await sendToPerson(person.jid, reply);
 }
 
 /** Encerra a conexão atual (usado antes de reparear). Não falha se já estiver parada. */
@@ -262,8 +283,9 @@ export async function startJarvisConnection() {
   onGuarded('message', async (person, text) => {
     console.log(`${TAG} [${person.id}] Recebido: ${text}`);
     try {
-      const reply = await getBrain(person).handleIncomingMessage(text);
-      await sendToPerson(person.jid, reply);
+      const brain = getBrain(person);
+      const reply = await brain.handleIncomingMessage(text);
+      await deliverReply(person, brain, reply);
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao responder:`, err);
       try {
@@ -289,7 +311,7 @@ export async function startJarvisConnection() {
       }
       console.log(`${TAG} [${person.id}] Transcrito: ${transcript}`);
       const reply = await withTimeout(brain.handleIncomingMessage(transcript), MEDIA_TIMEOUT_MS, 'Tempo esgotado respondendo');
-      await sendToPerson(person.jid, reply);
+      await deliverReply(person, brain, reply, { preferVoice: true });
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao processar áudio:`, err);
       try {
