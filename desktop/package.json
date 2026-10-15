@@ -1,0 +1,17 @@
+{
+  "name": "jarvis-desktop",
+  "productName": "Jarvis",
+  "version": "1.0.0",
+  "description": "App do Jarvis para o computador: conversa, voz e música, ligado ao mesmo Jarvis do WhatsApp.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "icon": "node make-icon.mjs",
+    "pack": "electron-packager . Jarvis --platform=win32 --arch=x64 --out=dist --overwrite --icon=assets/icon.ico --ignore=\"^/dist\" --ignore=\"^/make-icon.mjs\""
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.3.6",
+    "electron": "^33.2.0"
+  }
+}

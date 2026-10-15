@@ -26,6 +26,24 @@ export function sanitizeHistory(contents) {
   return slim.slice(start);
 }
 
+const TURN_PREFIX = /^\[Data\/hora atual:[^\]]*\](?: \[Canal:[^\]]*\])?\n/;
+
+/** Conversa em texto puro (quem falou o quê), pra mostrar no app do computador. */
+export function readableMessages(contents, limit = 30) {
+  const out = [];
+  for (const c of contents || []) {
+    if (c.role !== 'user' && c.role !== 'model') continue;
+    const text = (c.parts || [])
+      .filter((p) => typeof p.text === 'string' && !p.thought)
+      .map((p) => p.text)
+      .join('')
+      .replace(TURN_PREFIX, '')
+      .trim();
+    if (text) out.push({ role: c.role === 'model' ? 'jarvis' : 'user', text });
+  }
+  return out.slice(-limit);
+}
+
 export function createMemory(id) {
   const file = `${MEMORY_DIR}/${id}.json`;
 

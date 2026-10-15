@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http: https:; media-src data: blob:; img-src 'self' data: file:; style-src 'self'; script-src 'self'">
+  <title>Jarvis</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <section id="setup" class="view" hidden>
+    <div class="setup-card">
+      <img src="../assets/icon.png" alt="" class="logo">
+      <h1>Conectar este computador</h1>
+      <p class="muted">Peça ao Jarvis no WhatsApp: <strong>"quero conectar o Jarvis no meu computador"</strong>. Ele responde com um código de 6 dígitos.</p>
+      <form id="pair-form" autocomplete="off">
+        <label for="server">Endereço do servidor</label>
+        <input id="server" type="text" placeholder="http://192.168.3.122:4545" spellcheck="false">
+        <label for="code">Código</label>
+        <input id="code" type="text" inputmode="numeric" maxlength="6" placeholder="000000" spellcheck="false">
+        <button type="submit" id="pair-btn" class="primary">Conectar</button>
+        <p id="pair-error" class="error" role="alert"></p>
+      </form>
+    </div>
+  </section>
+
+  <section id="chat" class="view" hidden>
+    <header>
+      <div class="title">
+        <span id="status-dot" class="dot" title="Conexão com o servidor"></span>
+        <span>Jarvis</span>
+      </div>
+      <label class="toggle" title="O Jarvis responde em áudio quando a resposta for curta">
+        <input type="checkbox" id="voice-toggle">
+        <span>Respostas por voz</span>
+      </label>
+    </header>
+
+    <div id="player" class="player" hidden>
+      <div class="player-info">
+        <span class="player-label">Tocando</span>
+        <span id="player-title" class="player-title"></span>
+      </div>
+      <div class="player-actions">
+        <button id="player-toggle" class="ghost" type="button">Pausar</button>
+        <button id="player-show" class="ghost" type="button">Player</button>
+        <button id="player-stop" class="ghost" type="button">Parar</button>
+      </div>
+    </div>
+
+    <main id="messages" aria-live="polite"></main>
+
+    <form id="composer">
+      <textarea id="input" rows="1" placeholder="Escreva para o Jarvis" spellcheck="true"></textarea>
+      <button type="button" id="mic" class="icon-btn" title="Falar (Ctrl+Alt+J)" aria-label="Gravar áudio">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+      </button>
+      <button type="submit" id="send" class="primary">Enviar</button>
+    </form>
+    <footer>
+      <span id="hint" class="muted"></span>
+      <button id="disconnect" class="link" type="button">Desconectar</button>
+    </footer>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

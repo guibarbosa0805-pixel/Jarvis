@@ -5,6 +5,13 @@ import { nanoid } from 'nanoid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LEAD_MINUTES = 30;
+const FINAL_LEAD_MINUTES = 10;
+
+/** Minutos antes do horário em que a tarefa avisa: o aviso principal (padrão 30) e o final (10), do mais distante ao mais próximo. */
+export function leadOffsets(task) {
+  const main = task.leadMinutes ?? DEFAULT_LEAD_MINUTES;
+  return [...new Set([main, FINAL_LEAD_MINUTES])].filter((m) => m > 0).sort((a, b) => b - a);
+}
 
 function makeStore(dataFile) {
   function ensureDataFile() {
@@ -78,6 +85,38 @@ function makeStore(dataFile) {
     return readAll().filter((t) => t.status === 'pending' && !t.dueSent && t.dueAt && new Date(t.dueAt) <= now);
   }
 
+  /**
+   * Avisos antecipados pendentes agora. Cada tarefa tem vários (padrão 30 e 10 min antes);
+   * avisos cujo horário já tinha passado quando a tarefa foi criada são ignorados, e se
+   * mais de um vencer junto manda só um, com o tempo restante real.
+   */
+  function findDueLeads(now = new Date()) {
+    const out = [];
+    for (const t of readAll()) {
+      if (t.status !== 'pending' || !t.dueAt) continue;
+      const dueMs = new Date(t.dueAt).getTime();
+      if (dueMs <= now.getTime()) continue;
+      const createdMs = new Date(t.createdAt || 0).getTime();
+      const done = new Set(t.leadsSent || []);
+      if (t.leadSent) done.add(t.leadMinutes ?? DEFAULT_LEAD_MINUTES);
+      const due = leadOffsets(t).filter((m) => {
+        const at = dueMs - m * 60000;
+        return !done.has(m) && at <= now.getTime() && at >= createdMs - 60000;
+      });
+      if (!due.length) continue;
+      out.push({ task: t, offsets: due, minutes: Math.min(Math.max(...due), Math.ceil((dueMs - now.getTime()) / 60000)) });
+    }
+    return out;
+  }
+
+  function markLeadsSent(id, offsets) {
+    const tasks = readAll();
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    task.leadsSent = [...new Set([...(task.leadsSent || []), ...offsets])];
+    writeAll(tasks);
+  }
+
   function markLeadSent(id) {
     const tasks = readAll();
     const task = tasks.find((t) => t.id === id);
@@ -94,7 +133,7 @@ function makeStore(dataFile) {
     writeAll(tasks);
   }
 
-  return { addTask, listPending, completeTask, deleteTask, findDueLead, findDueNow, markLeadSent, markDueSent };
+  return { addTask, listPending, completeTask, deleteTask, findDueLead, findDueLeads, findDueNow, markLeadSent, markLeadsSent, markDueSent };
 }
 
 /** Store para um nome de instância qualquer (usado pelo chat web do painel). */
@@ -111,7 +150,9 @@ export const {
   completeTask,
   deleteTask,
   findDueLead,
+  findDueLeads,
   findDueNow,
   markLeadSent,
+  markLeadsSent,
   markDueSent,
 } = defaultStore;

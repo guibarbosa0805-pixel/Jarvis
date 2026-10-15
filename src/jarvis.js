@@ -66,11 +66,14 @@ function getBrain(person) {
         store: createStore(person.id),
         memory: createMemory(person.id),
         channelLabel: 'no WhatsApp',
+        personId: person.id,
       }),
     );
   }
   return brains.get(person.id);
 }
+
+export { getBrain };
 
 /** Descarta a sessão em memória de uma pessoa (chamado ao editar/remover). */
 export function forgetBrain(personId) {
@@ -111,9 +114,8 @@ export async function sendToPerson(jid, text) {
  * Responde por voz quando a pessoa mandou áudio ou pediu áudio; cai pra texto se a
  * resposta tiver link, for longa demais ou o TTS falhar (cota, instabilidade).
  */
-async function deliverReply(person, brain, reply, { preferVoice = false } = {}) {
-  const wantVoice = preferVoice || brain.wantsVoice();
-  if (wantVoice && !hasLink(reply) && reply.length <= MAX_SPOKEN_CHARS) {
+async function deliverReply(person, brain, { text: reply, voice }, { preferVoice = false } = {}) {
+  if ((preferVoice || voice) && !hasLink(reply) && reply.length <= MAX_SPOKEN_CHARS) {
     try {
       const ogg = await withTimeout(brain.speak(reply), MEDIA_TIMEOUT_MS, 'Tempo esgotado gerando a voz');
       if (ogg) {
@@ -284,8 +286,7 @@ export async function startJarvisConnection() {
     console.log(`${TAG} [${person.id}] Recebido: ${text}`);
     try {
       const brain = getBrain(person);
-      const reply = await brain.handleIncomingMessage(text);
-      await deliverReply(person, brain, reply);
+      await deliverReply(person, brain, await brain.converse(text));
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao responder:`, err);
       try {
@@ -310,8 +311,8 @@ export async function startJarvisConnection() {
         return;
       }
       console.log(`${TAG} [${person.id}] Transcrito: ${transcript}`);
-      const reply = await withTimeout(brain.handleIncomingMessage(transcript), MEDIA_TIMEOUT_MS, 'Tempo esgotado respondendo');
-      await deliverReply(person, brain, reply, { preferVoice: true });
+      const result = await withTimeout(brain.converse(transcript), MEDIA_TIMEOUT_MS, 'Tempo esgotado respondendo');
+      await deliverReply(person, brain, result, { preferVoice: true });
     } catch (err) {
       console.error(`${TAG} [${person.id}] Erro ao processar áudio:`, err);
       try {

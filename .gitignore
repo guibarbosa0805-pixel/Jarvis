@@ -9,3 +9,4 @@ qr-*.png
 status/
 logs/
 panel.env
+desktop/dist/

@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { readStatus } from './status.js';
 import { startJarvisConnection, stopJarvisConnection, forgetBrain } from './jarvis.js';
 import { startPeopleScheduler } from './scheduler-people.js';
+import { createDesktopRouter } from './desktop-api.js';
+import { revokeTokensOf } from './desktop.js';
 import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending, migrateDigestDefaults } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -142,6 +144,8 @@ function stopInstance(name) {
 }
 
 const app = express();
+// App do computador: autentica por token próprio, então vem antes da senha do painel.
+app.use('/api/desktop', createDesktopRouter());
 app.use(requireAuth);
 app.use(express.json());
 app.use(express.static(`${ROOT}/public`));
@@ -232,6 +236,7 @@ app.put('/api/people/:id', (req, res) => {
 
 app.delete('/api/people/:id', (req, res) => {
   forgetBrain(req.params.id);
+  revokeTokensOf(req.params.id);
   const removed = removePerson(req.params.id);
   res.json({ ok: removed });
 });

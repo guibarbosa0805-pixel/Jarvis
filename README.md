@@ -119,3 +119,25 @@ Agendamento(s) de hoje:
 
 - **Desconectou / parou de responder**: o log daquela instância mostra o motivo. Se disser "sessão desconectada", apague a pasta `auth/<nome>/` e rode `node src/index.js <nome>` de novo para gerar um novo QR code.
 - **"Grupo não encontrado"** (só se `GROUP_NAME` estiver preenchido): precisa ser **idêntico** ao nome do grupo no WhatsApp, incluindo emojis (ex: `Jarvis🧠` ≠ `Jarvis`). O log mostra a lista de grupos encontrados se não bater. Deixando `GROUP_NAME` vazio esse problema não existe (usa a conversa "Mensagens para você mesmo").
+
+## 7. App do computador (voz, música e a mesma conversa do WhatsApp)
+
+Pasta `desktop/`: um app Windows (Electron) que usa **o mesmo Jarvis do WhatsApp** — mesma conversa, mesma agenda, mesmas instruções e memória. O que você diz num canal aparece no outro. Ele fica na bandeja do Windows e recebe ações do servidor.
+
+**Gerar o app e abrir** (na máquina onde ele vai rodar):
+
+```bash
+cd desktop
+npm install
+npm run pack        # gera desktop/dist/Jarvis-win32-x64/Jarvis.exe
+```
+
+**Conectar:** no WhatsApp, peça "quero conectar o Jarvis no meu computador". Ele responde com um código de 6 dígitos (vale 10 min). No app, informe o endereço do servidor (ex: `http://192.168.3.122:4545`) e o código. O aparelho fica autorizado por token próprio (guardado criptografado no Windows); pra revogar, "Desconectar" no app ou remover a pessoa no painel.
+
+**O que dá pra fazer**
+- Escrever ou falar (botão do microfone ou `Ctrl+Alt+J`); marque "Respostas por voz" pra ele responder falando.
+- "Toca AC/DC Thunderstruck" (pelo app **ou pelo WhatsApp**, com o app aberto no PC). Por padrão abre no **YouTube Music do navegador** (menu da bandeja > Tocar música: Brave, navegador padrão ou janela do Jarvis). Pausar/continuar/volume funcionam por teclas de mídia do Windows.
+- Rotina de bom dia: "configure meu bom dia: responda 'Bom dia, senhor' e toque AC/DC Shoot to Thrill". Depois, só "bom dia" dispara voz + música.
+- Lembretes (30 min e 10 min antes, e na hora) chegam também como notificação do Windows.
+
+> A busca de músicas lê a página de resultados do YouTube (sem chave de API). Se o YouTube mudar o formato, o Jarvis cai pra um link de busca.

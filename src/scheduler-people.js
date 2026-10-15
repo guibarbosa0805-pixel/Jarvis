@@ -4,6 +4,7 @@ import { createStore } from './store.js';
 import { formatDateShort, formatTime, formatDateTimeFull } from './format.js';
 import { sendToPerson } from './jarvis.js';
 import { groupAgenda } from './agenda.js';
+import { pushToDesktop } from './desktop.js';
 
 const TAG = '[jarvis]';
 const DIGEST_WINDOW_MIN = 180;
@@ -75,12 +76,13 @@ export function startPeopleScheduler() {
     for (const person of listPeople()) {
       const store = createStore(person.id);
 
-      for (const task of store.findDueLead(now)) {
+      for (const { task, offsets, minutes } of store.findDueLeads(now)) {
         try {
-          const lines = [`⏰ Lembrete: faltam ${task.leadMinutes} min!`, '', `📅 ${task.title}`, `📆 ${formatDateShort(task.dueAt)} às ${formatTime(task.dueAt)}`];
+          const lines = [`⏰ Lembrete: faltam ${minutes} min!`, '', `📅 ${task.title}`, `📆 ${formatDateShort(task.dueAt)} às ${formatTime(task.dueAt)}`];
           if (task.link) lines.push(`🔗 Link: ${task.link}`);
           await sendToPerson(person.jid, lines.join('\n'));
-          store.markLeadSent(task.id);
+          store.markLeadsSent(task.id, offsets);
+          pushToDesktop(person.id, { type: 'notify', title: `Faltam ${minutes} min`, body: task.title });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete antecipado:`, err.message);
         }
@@ -92,6 +94,7 @@ export function startPeopleScheduler() {
           if (task.link) lines.push('', `🔗 ${task.link}`);
           await sendToPerson(person.jid, lines.join('\n'));
           store.markDueSent(task.id);
+          pushToDesktop(person.id, { type: 'notify', title: 'Agora', body: task.title });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete:`, err.message);
         }
