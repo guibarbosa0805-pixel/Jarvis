@@ -386,21 +386,24 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
     const routine = findPersonById(personId)?.goodMorning;
     if (!routine?.reply) return null;
 
-    const flags = { channel, actions: [] };
+    // A música só começa depois da fala: no app, as ações rodam quando o áudio termina;
+    // vindo do WhatsApp, ficam em "deferred" e o envio da voz as dispara no tempo certo.
     let spoken = routine.reply;
+    const actions = [];
+    const deferred = [];
     if (routine.music) {
-      let played = false;
+      let action = null;
       try {
         const track = await searchMusic(routine.music);
-        if (track) {
-          played = sendToDesktop({ personId, flags }, { type: 'play_music', videoId: track.videoId, title: track.title, url: track.url, alternatives: track.alternatives });
-        }
+        if (track) action = { type: 'play_music', videoId: track.videoId, title: track.title, url: track.url, alternatives: track.alternatives };
       } catch {
         // sem música desta vez
       }
-      if (!played && channel !== 'desktop') spoken += ' Abra o app do Jarvis no computador para eu tocar a sua música.';
+      if (action && channel === 'desktop') actions.push(action);
+      else if (action && isDesktopOnline(personId)) deferred.push(action);
+      else if (channel !== 'desktop') spoken += ' Abra o app do Jarvis no computador para eu tocar a sua música.';
     }
-    return { text: spoken, voice: true, actions: flags.actions };
+    return { text: spoken, voice: true, actions, deferred };
   }
 
   async function converse(text, image, channel, call) {

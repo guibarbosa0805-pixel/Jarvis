@@ -17,6 +17,7 @@ import { createStore } from './store.js';
 import { createBrain } from './gemini.js';
 import { createMemory } from './memory.js';
 import { hasLink, MAX_SPOKEN_CHARS } from './voice.js';
+import { pushToDesktop } from './desktop.js';
 import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, updatePerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -114,12 +115,18 @@ export async function sendToPerson(jid, text) {
  * Responde por voz quando a pessoa mandou áudio ou pediu áudio; cai pra texto se a
  * resposta tiver link, for longa demais ou o TTS falhar (cota, instabilidade).
  */
-async function deliverReply(person, brain, { text: reply, voice }, { preferVoice = false } = {}) {
+async function deliverReply(person, brain, { text: reply, voice, deferred = [] }, { preferVoice = false } = {}) {
+  // Ações pro computador (ex: música) começam depois da fala, estimada pelo tamanho do áudio (~32 kbps).
+  const pushDeferred = (delayMs) => {
+    if (deferred.length) setTimeout(() => deferred.forEach((action) => pushToDesktop(person.id, action)), delayMs);
+  };
+
   if ((preferVoice || voice) && !hasLink(reply) && reply.length <= MAX_SPOKEN_CHARS) {
     try {
       const ogg = await withTimeout(brain.speak(reply), MEDIA_TIMEOUT_MS, 'Tempo esgotado gerando a voz');
       if (ogg) {
         await sock.sendMessage(person.jid, { audio: ogg, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+        pushDeferred((ogg.length * 8) / 32 + 1500);
         return;
       }
     } catch (err) {
@@ -127,6 +134,7 @@ async function deliverReply(person, brain, { text: reply, voice }, { preferVoice
     }
   }
   await sendToPerson(person.jid, reply);
+  pushDeferred(0);
 }
 
 /** Encerra a conexão atual (usado antes de reparear). Não falha se já estiver parada. */

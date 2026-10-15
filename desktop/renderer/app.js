@@ -135,13 +135,13 @@ $('pair-form').addEventListener('submit', async (e) => {
 async function handleReply(body) {
   if (body.transcript) addMessage(body.transcript, 'user');
   addMessage(body.text, 'jarvis');
-  if (body.actions?.length) window.jarvis.runActions(body.actions);
-  if (body.audio) {
-    const playing = playVoice(body.audio);
-    if (call) await playing;
-  } else if (body.voiceUnavailable) {
-    await speakLocally(body.text);
-  }
+
+  // Ações (ex: tocar música) só começam depois que o Jarvis termina de falar.
+  const speech = body.audio ? playVoice(body.audio) : body.voiceUnavailable ? speakLocally(body.text) : Promise.resolve();
+  const done = speech.then(() => {
+    if (body.actions?.length) window.jarvis.runActions(body.actions);
+  });
+  if (call) await done;
 }
 
 let warnedVoice = false;
