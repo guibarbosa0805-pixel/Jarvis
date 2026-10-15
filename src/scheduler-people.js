@@ -82,7 +82,7 @@ export function startPeopleScheduler() {
           if (task.link) lines.push(`🔗 Link: ${task.link}`);
           await sendProactive(person, lines.join('\n'));
           store.markLeadsSent(task.id, offsets);
-          pushToDesktop(person.id, { type: 'notify', title: `Faltam ${minutes} min`, body: task.title });
+          pushToDesktop(person.id, { type: 'notify', kind: 'lead', title: `Faltam ${minutes} min`, body: `${task.title} às ${formatTime(task.dueAt)}`, link: task.link || '' });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete antecipado:`, err.message);
         }
@@ -94,7 +94,7 @@ export function startPeopleScheduler() {
           if (task.link) lines.push('', `🔗 ${task.link}`);
           await sendProactive(person, lines.join('\n'));
           store.markDueSent(task.id);
-          pushToDesktop(person.id, { type: 'notify', title: 'Agora', body: task.title });
+          pushToDesktop(person.id, { type: 'notify', kind: 'due', title: 'É agora', body: task.title, link: task.link || '' });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete:`, err.message);
         }

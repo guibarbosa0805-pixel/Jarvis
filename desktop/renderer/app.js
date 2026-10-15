@@ -42,6 +42,10 @@ function addMessage(text, kind = 'jarvis') {
       el.append(part);
     }
   }
+  if (kind === 'jarvis' || kind === 'user') {
+    lastLine = kind === 'user' ? `Você: ${text}` : String(text);
+    publishState();
+  }
   const list = $('messages');
   list.append(el);
   list.scrollTop = list.scrollHeight;
@@ -77,7 +81,7 @@ function friendly(err) {
 
 const STATE_LABELS = {
   off: 'Escuta pausada. Toque no círculo para ouvir',
-  listening: () => (inConversation() || document.hasFocus() ? 'Pode falar, estou ouvindo' : 'Ouvindo. Diga "Jarvis"'),
+  listening: () => (inConversation() || hasUserFocus() ? 'Pode falar, estou ouvindo' : 'Ouvindo. Diga "Jarvis"'),
   recording: 'Ouvindo você...',
   thinking: 'Pensando...',
   speaking: 'Falando...',
@@ -89,7 +93,30 @@ function setOrb(state) {
   $('state-label').textContent = typeof label === 'function' ? label() : label;
   $('state-label').classList.toggle('active', state !== 'off' && state !== 'listening');
   if (state !== 'listening' && state !== 'recording') $('orb').style.setProperty('--level', 0);
+  publishState();
 }
+
+// ---------- Modo compacto: espelha o estado na janelinha do canto ----------
+
+let lastLine = '';
+let miniFocused = false;
+let levelTick = 0;
+
+function publishState(extra = {}) {
+  window.jarvis.uiState({ state: $('orb').dataset.state, label: $('state-label').textContent, last: lastLine, ...extra });
+}
+
+function publishLevel(level) {
+  if (++levelTick % 2 === 0) window.jarvis.uiState({ level });
+}
+
+window.jarvis.on('ui-refresh', () => publishState());
+window.jarvis.on('mini-focus', (focused) => {
+  miniFocused = focused;
+  if ($('orb').dataset.state === 'listening') setOrb('listening');
+});
+
+const hasUserFocus = () => document.hasFocus() || miniFocused;
 
 /** Estado "de repouso": ouvindo se a escuta estiver ligada, senão pausado. */
 function restOrb() {
@@ -171,6 +198,7 @@ function setVoice(on) {
 }
 
 $('voice-btn').addEventListener('click', () => setVoice(!voiceOn));
+$('mini-btn').addEventListener('click', () => window.jarvis.showMini());
 
 // ---------- Conexão com o WhatsApp ----------
 
@@ -324,8 +352,8 @@ function showChat() {
   $('hint').textContent = `${config.shortcut} liga/desliga a escuta`;
   showName(config.name);
   syncName();
-  loadHistory();
-  startCall(); // o app sempre abre ouvindo
+  // O app sempre abre ouvindo (depois do histórico, pra um aviso de erro não ser apagado).
+  loadHistory().finally(() => startCall());
 }
 
 // A conversa é a mesma do WhatsApp: mostra o que já foi dito lá (e aqui).
@@ -405,13 +433,18 @@ let call = null;
 let conversationUntil = 0;
 const inConversation = () => performance.now() < conversationUntil;
 
-async function startCall() {
+async function startCall(attempt = 0) {
   if (call) return;
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  } catch {
-    addMessage('Não consegui acessar o microfone. Verifique em Configurações do Windows > Privacidade > Microfone.', 'system error');
+  } catch (err) {
+    // Logo ao ligar o PC o microfone às vezes ainda não está pronto: tenta de novo algumas vezes.
+    if (attempt < 5) {
+      setTimeout(() => startCall(attempt + 1), 3000);
+      return;
+    }
+    addMessage(`Não consegui acessar o microfone (${err?.name || 'erro'}). Verifique em Configurações do Windows > Privacidade > Microfone e toque no círculo para tentar de novo.`, 'system error');
     restOrb();
     return;
   }
@@ -461,11 +494,13 @@ function callTick() {
 
   if (call.state === 'listening') {
     $('orb').style.setProperty('--level', Math.min(1, rms * 6).toFixed(3));
+    publishLevel(Math.min(1, rms * 6));
     call.floor = call.floor * 0.97 + rms * 0.03;
     call.loud = voiced ? call.loud + 1 : 0;
     if (call.loud >= 3) startUtterance(now);
   } else if (call.state === 'recording') {
     $('orb').style.setProperty('--level', Math.min(1, rms * 8).toFixed(3));
+    publishLevel(Math.min(1, rms * 8));
     if (voiced) {
       call.lastVoiceAt = now;
       call.voicedMs += CALL.tickMs;
@@ -559,7 +594,7 @@ async function onUtteranceEnd(samples, rate) {
   try {
     // Com a janela em foco a pessoa está falando com o app: não precisa dizer "Jarvis".
     // Em segundo plano (escondido na bandeja ou atrás de outras janelas), só responde se chamarem.
-    const needsWakeWord = !inConversation() && !document.hasFocus();
+    const needsWakeWord = !inConversation() && !hasUserFocus();
     const params = [`call=1`, `wake=${needsWakeWord ? 1 : 0}`];
     if (!voiceOn) params.push('voice=0');
     const body = await api(`/audio?${params.join('&')}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: blob });

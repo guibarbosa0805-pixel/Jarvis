@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, Notification, dialog, globalShortcut, ipcMain, nativeImage, session, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell, safeStorage } = require('electron');
 const { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -40,6 +40,8 @@ function loadConfig() {
     musicTarget,
     autoStartSet: !!raw.autoStartSet,
     morningMusic: raw.morningMusic && existsSync(raw.morningMusic) ? raw.morningMusic : '',
+    miniMode: !!raw.miniMode,
+    miniPos: raw.miniPos || null,
   };
 }
 
@@ -58,6 +60,8 @@ function saveConfig() {
       musicTarget: config.musicTarget,
       autoStartSet: config.autoStartSet,
       morningMusic: config.morningMusic,
+      miniMode: config.miniMode,
+      miniPos: config.miniPos,
     }),
     'utf8',
   );
@@ -108,14 +112,15 @@ function showWindow() {
 function buildTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   tray.setToolTip('Jarvis');
-  tray.on('click', showWindow);
+  tray.on('click', expandFromMini);
   refreshTrayMenu();
 }
 
 function refreshTrayMenu() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Abrir Jarvis', click: showWindow },
+      { label: 'Abrir Jarvis', click: expandFromMini },
+      { label: 'Modo compacto (canto da tela)', click: () => showMini() },
       { label: `Ligar/desligar escuta (${SHORTCUT.replace('Control', 'Ctrl')})`, click: toggleListening },
       { type: 'separator' },
       {
@@ -210,6 +215,7 @@ let watchTimer = null;
 function setNowPlaying(info) {
   nowPlaying = info;
   notifyRenderer('now-playing', info);
+  notifyMini('now-playing', info);
 }
 
 function ensurePlayer() {
@@ -361,9 +367,113 @@ function handleAction(action) {
   if (action.type === 'play_music' && action.videoId) playMusic(action);
   else if (action.type === 'control_music') controlMusic(action.action);
   else if (action.type === 'chat') notifyRenderer('chat', { user: action.user, reply: action.reply });
-  else if (action.type === 'notify') {
-    new Notification({ title: action.title || 'Jarvis', body: action.body || '', icon: ICON }).show();
+  else if (action.type === 'notify') showReminder(action);
+}
+
+// ---------- Modo compacto ----------
+// Janelinha flutuante, sempre por cima das outras, no canto da tela. A escuta continua
+// na janela principal (que fica carregada, só escondida); a compacta mostra o estado e
+// manda comandos.
+
+let mini = null;
+const MINI_SIZE = { width: 340, height: 92 };
+
+function miniPosition() {
+  const area = screen.getPrimaryDisplay().workArea;
+  const saved = config.miniPos;
+  if (saved && screen.getAllDisplays().some((d) => saved.x >= d.workArea.x && saved.y >= d.workArea.y && saved.x < d.workArea.x + d.workArea.width && saved.y < d.workArea.y + d.workArea.height)) {
+    return saved;
   }
+  return { x: area.x + area.width - MINI_SIZE.width - 16, y: area.y + area.height - MINI_SIZE.height - 16 };
+}
+
+function ensureMini() {
+  if (mini && !mini.isDestroyed()) return mini;
+  mini = new BrowserWindow({
+    ...MINI_SIZE,
+    ...miniPosition(),
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    title: 'Jarvis',
+    icon: ICON,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+  });
+  mini.setAlwaysOnTop(true, 'floating');
+  mini.loadFile(path.join(__dirname, 'renderer', 'mini.html'));
+  mini.on('moved', () => {
+    const [x, y] = mini.getPosition();
+    config.miniPos = { x, y };
+    saveConfig();
+  });
+  // Com a compacta em foco, a pessoa está falando com o Jarvis: não precisa dizer o nome.
+  mini.on('focus', () => notifyRenderer('mini-focus', true));
+  mini.on('blur', () => notifyRenderer('mini-focus', false));
+  mini.on('closed', () => {
+    mini = null;
+  });
+  return mini;
+}
+
+function notifyMini(channel, payload) {
+  if (mini && !mini.isDestroyed()) mini.webContents.send(channel, payload);
+}
+
+function showMini() {
+  const m = ensureMini();
+  m.showInactive();
+  win?.hide();
+  config.miniMode = true;
+  saveConfig();
+  notifyRenderer('ui-refresh');
+}
+
+function expandFromMini() {
+  mini?.hide();
+  config.miniMode = false;
+  saveConfig();
+  showWindow();
+}
+
+// ---------- Notificações do Windows ----------
+// O Windows só mostra a notificação de um app identificado (AppUserModelID) com atalho no
+// Menu Iniciar; o app cria esse atalho sozinho na primeira vez.
+
+const APP_ID = 'br.com.bookplay.jarvis';
+const notifications = new Set(); // mantém referência até fechar (senão o clique se perde)
+
+function ensureStartMenuShortcut() {
+  if (!app.isPackaged) return;
+  const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Jarvis.lnk');
+  const details = { target: process.execPath, appUserModelId: APP_ID, icon: process.execPath, iconIndex: 0, description: 'Jarvis' };
+  try {
+    const current = existsSync(lnk) ? shell.readShortcutLink(lnk) : null;
+    if (current?.target !== details.target || current?.appUserModelId !== APP_ID) shell.writeShortcutLink(lnk, current ? 'replace' : 'create', details);
+  } catch (err) {
+    console.error('Não consegui criar o atalho do Menu Iniciar:', err.message);
+  }
+}
+
+function showReminder({ title, body, link }) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title: title || 'Lembrete', body: `${body || ''}${link ? '\nClique para abrir o link' : ''}`, icon: ICON, urgency: 'critical' });
+  notifications.add(n);
+  const release = () => notifications.delete(n);
+  n.on('click', () => {
+    if (link && /^https?:\/\//.test(link)) shell.openExternal(link);
+    else showWindow();
+    release();
+  });
+  n.on('close', release);
+  n.show();
+  notifyMini('reminder', { title, body });
 }
 
 // ---------- Canal de eventos do servidor (SSE) ----------
@@ -375,6 +485,7 @@ let connectionStatus = 'offline';
 function setStatus(status) {
   connectionStatus = status;
   notifyRenderer('connection', status);
+  notifyMini('connection', status);
 }
 
 async function connectEvents() {
@@ -453,6 +564,16 @@ ipcMain.handle('actions:run', (_e, actions) => {
 });
 ipcMain.handle('music:control', (_e, action) => controlMusic(action));
 ipcMain.handle('music:duck', (_e, on) => duckMusic(!!on));
+// Estado da voz (vem da janela principal) espelhado na compacta.
+ipcMain.on('ui:state', (_e, state) => notifyMini('ui-state', state));
+ipcMain.handle('mini:show', () => showMini());
+ipcMain.handle('mini:info', () => ({ nowPlaying, status: connectionStatus }));
+ipcMain.handle('mini:command', (_e, cmd) => {
+  if (cmd === 'expand') expandFromMini();
+  else if (cmd === 'toggle-listen') notifyRenderer('toggle-record');
+  else if (['pause', 'resume', 'stop'].includes(cmd)) controlMusic(cmd);
+});
+
 ipcMain.handle('music:show', () => {
   if (nowPlaying?.source === 'app' && player && !player.isDestroyed()) {
     player.show();
@@ -462,10 +583,13 @@ ipcMain.handle('music:show', () => {
 
 // ---------- Ciclo de vida ----------
 
-app.on('second-instance', showWindow);
+app.on('second-instance', expandFromMini);
+
+app.setAppUserModelId(APP_ID);
 
 app.whenReady().then(() => {
   config = loadConfig();
+  ensureStartMenuShortcut();
 
   // Na primeira execução do app instalado, já liga "Iniciar com o Windows" (dá pra desligar na bandeja).
   if (app.isPackaged && !config.autoStartSet) {
@@ -478,7 +602,10 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media' || permission === 'notifications'));
 
   buildTray();
-  createWindow(!(process.argv.includes('--hidden') && config.token));
+  const startHidden = process.argv.includes('--hidden') && config.token;
+  // Se a pessoa deixou no modo compacto, volta nele.
+  createWindow(!startHidden && !(config.miniMode && config.token));
+  if (config.miniMode && config.token) win.webContents.once('did-finish-load', showMini);
   globalShortcut.register(SHORTCUT, toggleListening);
   connectEvents();
 });
