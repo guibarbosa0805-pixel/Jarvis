@@ -67,9 +67,24 @@ function handleClient(ws, person) {
   let idleTimer = null;
   let chain = Promise.resolve();
 
-  // Estado do turno atual.
+  // Estado do turno atual. muted: a pessoa interrompeu e o resto daquela resposta é descartado.
   let turn = null;
-  const newTurn = () => ({ user: '', reply: '', audio: false, tool: false, wipe: false, endedAt: 0, firstAudioAt: 0 });
+  // generating: o Gemini ainda está produzindo uma resposta. muted: a pessoa interrompeu e o resto
+  // daquela resposta (até "interrupted"/"turnComplete") é descartado. Entradas novas esperam o mute
+  // acabar, senão o fim da resposta antiga fecharia o turno novo.
+  let generating = false;
+  let muted = false;
+  let muteTimer = null;
+  const unmuteWaiters = [];
+
+  function setMuted(on) {
+    muted = on;
+    clearTimeout(muteTimer);
+    if (on) muteTimer = setTimeout(() => setMuted(false), 2500); // rede de segurança
+    else unmuteWaiters.splice(0).forEach((resolve) => resolve());
+  }
+  const whenUnmuted = () => (muted ? new Promise((resolve) => unmuteWaiters.push(resolve)) : Promise.resolve());
+  const newTurn = () => ({ user: '', reply: '', audio: false, tool: false, wipe: false, announce: false, endedAt: 0, firstAudioAt: 0 });
 
   function touch() {
     clearTimeout(idleTimer);
@@ -115,10 +130,12 @@ function handleClient(ws, person) {
     session?.sendToolResponse({ functionResponses });
   }
 
-  function finishTurn() {
+  /** force: a pessoa interrompeu — registra o que já tinha sido dito. */
+  function finishTurn(force = false) {
     const t = turn;
     // Depois de uma função vem um turnComplete sem fala; a resposta chega no turno seguinte.
-    if (!t || (t.tool && !t.audio && !t.reply)) return;
+    if (!t || (!force && t.tool && !t.audio && !t.reply)) return;
+    if (!force && !t.user && !t.reply && !t.audio && !t.tool) return;
     turn = null;
     const user = t.user.trim();
     const reply = t.reply.trim();
@@ -126,6 +143,11 @@ function handleClient(ws, person) {
     send({ type: 'turn-complete', user, reply });
     if (t.wipe) {
       closeSession(); // memória apagada: a próxima conversa começa do zero
+      return;
+    }
+    if (t.announce) {
+      // Aviso falado por conta própria (ex: reunião em 10 min): entra no histórico como mensagem do Jarvis.
+      if (reply) getBrain(findPersonById(person.id) || person).recordProactive(reply).catch(() => {});
       return;
     }
     if (user || reply) {
@@ -149,6 +171,11 @@ function handleClient(ws, person) {
     }
     const sc = m.serverContent;
     if (!sc) return;
+    if (sc.turnComplete) generating = false;
+    if (muted) {
+      if (sc.turnComplete) setMuted(false);
+      return;
+    }
     turn ??= newTurn();
     if (sc.inputTranscription?.text) {
       turn.user += sc.inputTranscription.text;
@@ -231,20 +258,47 @@ function handleClient(ws, person) {
     touch();
     if (msg.type === 'warm') {
       await ensureSession();
+    } else if (msg.type === 'stop') {
+      // Interrupção pelo clique: guarda o que já foi dito e ignora o resto dessa resposta.
+      if (turn && (turn.user || turn.reply)) finishTurn(true);
+      turn = null;
+      if (generating) {
+        generating = false;
+        closeSession();
+      }
     } else if (msg.type === 'start') {
+      // Interrompeu o Jarvis no meio da fala: guarda o que ele já tinha dito antes de ouvir de novo.
+      // O activityStart já faz o Gemini abandonar a resposta antiga ("interrupted").
+      if (turn && (turn.user || turn.reply)) finishTurn(true);
+      if (generating) setMuted(true);
       turn = newTurn();
       const s = await ensureSession();
       s.sendRealtimeInput({ activityStart: {} });
     } else if (msg.type === 'end') {
       const s = await ensureSession();
       s.sendRealtimeInput({ activityEnd: {} });
+      generating = true;
       if (turn) turn.endedAt = Date.now();
+    } else if (msg.type === 'announce' && msg.text) {
+      // O app pede pra falar um aviso (ex: lembrete de reunião) sem a pessoa ter perguntado.
+      await whenUnmuted();
+      turn = newTurn();
+      turn.announce = true;
+      turn.endedAt = Date.now();
+      const s = await ensureSession();
+      s.sendClientContent({
+        turns: [{ role: 'user', parts: [{ text: `[Aviso automático — não é fala da pessoa. Avise em voz alta, em uma ou duas frases curtas e naturais, chamando pelo nome: ${String(msg.text)}]` }] }],
+        turnComplete: true,
+      });
+      generating = true;
     } else if (msg.type === 'text' && msg.text) {
+      await whenUnmuted();
       turn = newTurn();
       turn.user = String(msg.text);
       turn.endedAt = Date.now();
       const s = await ensureSession();
       s.sendClientContent({ turns: [{ role: 'user', parts: [{ text: String(msg.text) }] }], turnComplete: true });
+      generating = true;
     }
   }
 

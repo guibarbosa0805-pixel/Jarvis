@@ -317,6 +317,30 @@ async function endLiveTurn() {
 })();
 
 window.addEventListener('focus', warmLive);
+
+// Lembrete chegando: com a voz em tempo real ligada, o Jarvis avisa falando (10 min antes e na hora).
+const pendingAnnouncements = [];
+
+window.jarvis.on('reminder', (r) => {
+  const speak = r.kind === 'due' || (r.kind === 'lead' && Number(r.minutes) <= 10);
+  if (!speak || !voiceOn) return;
+  const when = r.kind === 'due' ? 'é agora' : `começa em ${r.minutes} minutos`;
+  const link = r.link ? ` Tem link da reunião (${r.link}): pergunte se a pessoa quer que você abra.` : '';
+  pendingAnnouncements.push(`"${r.taskTitle || r.body}" ${when}.${link}`);
+  announceNext();
+});
+
+function announceNext() {
+  if (!pendingAnnouncements.length || busy || liveTurn || !canUseLive() || $('chat').hidden) return;
+  const text = pendingAnnouncements.shift();
+  setBusy(true);
+  if (call) call.state = 'processing';
+  beginLiveTurn(null);
+  live.send({ type: 'announce', text });
+}
+
+// Se chegou um aviso enquanto ele estava ocupado, fala assim que terminar.
+setInterval(announceNext, 2000);
 window.jarvis.on('mini-focus', (focused) => focused && warmLive());
 
 // ---------- Conexão com o WhatsApp ----------
@@ -554,7 +578,7 @@ $('input').addEventListener('input', autoGrow);
 // (com uma folga antes, pra não cortar o "Jarvis"). Fora de uma conversa em andamento,
 // o servidor só responde se ouvir "Jarvis" ou uma saudação.
 
-const CALL = { minVoiceMs: 300, silenceMs: 850, maxUtteranceMs: 30000, tickMs: 40, conversationMs: 20000, preRollSec: 0.6 };
+const CALL = { minVoiceMs: 300, silenceMs: 850, maxUtteranceMs: 30000, tickMs: 40, conversationMs: 20000, preRollSec: 0.6, bargeMinRms: 0.04, bargeTicks: 6 };
 let call = null;
 let conversationUntil = 0;
 const inConversation = () => performance.now() < conversationUntil;
@@ -602,8 +626,26 @@ function endCall() {
 }
 
 function toggleCall() {
+  // Clique no orb (ou Ctrl+Alt+J) enquanto o Jarvis fala: ele para na hora e volta a ouvir.
+  if (liveTurn && player.playing) return stopSpeaking();
   if (call) endCall();
   else startCall();
+}
+
+/** Interrupção manual: corta a fala e fica pronto pra ouvir, sem precisar dizer "Jarvis". */
+function stopSpeaking() {
+  live.send({ type: 'stop' });
+  player.stop();
+  window.jarvis.duckMusic(false);
+  const turn = liveTurn;
+  if (turn) {
+    turn.completed = true;
+    clearTimeout(turn.timer);
+    liveTurn = null;
+  }
+  setBusy(false);
+  conversationUntil = performance.now() + CALL.conversationMs;
+  resumeListening();
 }
 
 function callTick() {
@@ -634,7 +676,31 @@ function callTick() {
     // Já é fala de verdade (não um estalo): começa a mandar ao vivo, com a folga gravada antes.
     if (call.live && !call.liveStarted && call.voicedMs >= CALL.minVoiceMs) startLiveUtterance();
     if (now - call.lastVoiceAt > CALL.silenceMs || now - call.startedAt > CALL.maxUtteranceMs) finishUtterance();
+  } else if (call.state === 'processing' && liveTurn && player.playing) {
+    // Fala por cima do Jarvis: ele para e escuta. O cancelamento de eco abafa o microfone enquanto
+    // ele fala e a voz da pessoa chega oscilando, então soma quando passa do limite e desconta devagar.
+    const bargeThreshold = Math.max(CALL.bargeMinRms, call.floor * 4);
+    call.barge = Math.max(0, (call.barge || 0) + (rms > bargeThreshold ? 1 : -0.5));
+    if (call.barge >= CALL.bargeTicks) interruptJarvis(now);
   }
+}
+
+/** A pessoa começou a falar enquanto o Jarvis falava: corta a fala dele e passa a ouvir. */
+function interruptJarvis(now) {
+  player.stop();
+  window.jarvis.duckMusic(false);
+  const turn = liveTurn;
+  if (turn) {
+    turn.completed = true;
+    clearTimeout(turn.timer);
+    liveTurn = null; // o resto do áudio dessa resposta é descartado ao chegar
+  }
+  setBusy(false);
+  // Ela está claramente falando com o Jarvis: segue sem precisar dizer o nome.
+  conversationUntil = performance.now() + CALL.conversationMs;
+  call.barge = 0;
+  call.loud = 3;
+  startUtterance(now);
 }
 
 function startUtterance(now) {
@@ -682,7 +748,7 @@ function onSamples(chunk) {
   if (call.state === 'recording') {
     call.utter.push(chunk);
     if (call.liveStarted) live.sendAudio(toPcm16k(chunk, call.ctx.sampleRate));
-  } else if (call.state === 'listening') {
+  } else if (call.state === 'listening' || call.state === 'processing') {
     call.ring.push(chunk);
     call.ringSamples += chunk.length;
     const keep = call.ctx.sampleRate * CALL.preRollSec;

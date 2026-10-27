@@ -21,6 +21,7 @@ import { startPeopleScheduler } from './scheduler-people.js';
 import { createDesktopRouter } from './desktop-api.js';
 import { revokeTokensOf } from './desktop.js';
 import { attachLiveServer } from './live.js';
+import { startAutoUpdate } from './updater.js';
 import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending, migrateDigestDefaults } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -388,6 +389,7 @@ attachLiveServer(httpServer);
 // JARVIS_DISABLED=1 sobe só o painel, sem WhatsApp nem lembretes (útil pra testar
 // a interface sem derrubar a sessão que está rodando em outro lugar).
 if (process.env.JARVIS_DISABLED !== '1') {
+  startAutoUpdate();
   try {
     const migrated = migrateDigestDefaults();
     if (migrated) console.log(`[painel] Resumo matinal (07:30) ligado por padrão pra ${migrated} pessoa(s).`);

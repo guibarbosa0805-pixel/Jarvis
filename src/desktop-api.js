@@ -4,7 +4,7 @@ import { getBrain, getJarvisNumber, mirrorDesktopExchange } from './jarvis.js';
 import { findPersonById } from './people.js';
 import { createStore } from './store.js';
 import { createMemory, readableMessages } from './memory.js';
-import { redeemPairingCode, personIdFromToken, attachClient, createDesktopRequest, pollDesktopRequest } from './desktop.js';
+import { redeemPairingCode, personIdFromToken, attachClient, createDesktopRequest, pollDesktopRequest, resolveDesktopRequest } from './desktop.js';
 import { hasWakeWord, isGreeting, wavToOggOpus } from './voice.js';
 
 const TAG = '[painel]';
@@ -101,6 +101,12 @@ export function createDesktopRouter() {
   // A mesma conversa do WhatsApp: o app abre já mostrando o que foi dito lá.
   router.get('/history', (req, res) => {
     res.json(readableMessages(createMemory(req.person.id).loadHistory()));
+  });
+
+  // Resposta do app a uma pergunta do servidor (ex: conteúdo da área de transferência).
+  router.post('/rpc/:id', express.json({ limit: '200kb' }), (req, res) => {
+    const ok = resolveDesktopRequest(req.person.id, req.params.id, req.body?.result, req.body?.error);
+    res.status(ok ? 200 : 404).json({ ok });
   });
 
   router.get('/tasks', (req, res) => {

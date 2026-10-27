@@ -84,6 +84,32 @@ export function createMemory(id) {
       return p;
     },
 
+    /** Tira itens do perfil (a pessoa corrigindo o que o Jarvis sabe). Aceita trechos: "Bookplay" remove "trabalha na Bookplay". */
+    removeFromProfile({ city = false, interests = [], notes = [] }) {
+      const data = read();
+      const p = data.profile;
+      const removed = [];
+      const matches = (item, wanted) => {
+        const a = item.toLowerCase();
+        const b = String(wanted).toLowerCase().trim();
+        return b && (a.includes(b) || b.includes(a));
+      };
+      const prune = (list, wanted) =>
+        list.filter((item) => {
+          const hit = wanted.some((w) => matches(item, w));
+          if (hit) removed.push(item);
+          return !hit;
+        });
+      if (city && p.city) {
+        removed.push(`cidade: ${p.city}`);
+        p.city = '';
+      }
+      p.interests = prune(p.interests, interests || []);
+      p.notes = prune(p.notes, notes || []);
+      write(data);
+      return { profile: p, removed };
+    },
+
     loadHistory: () => read().history,
 
     saveHistory(contents) {

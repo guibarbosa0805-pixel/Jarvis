@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, Notification, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, clipboard, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell, safeStorage } = require('electron');
 const { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -368,6 +368,60 @@ function handleAction(action) {
   else if (action.type === 'control_music') controlMusic(action.action);
   else if (action.type === 'chat') notifyRenderer('chat', { user: action.user, reply: action.reply });
   else if (action.type === 'notify') showReminder(action);
+  else if (action.type === 'open') openOnComputer(action);
+  else if (action.type === 'type_text') typeText(action.text);
+  else if (action.type === 'rpc') answerRpc(action);
+}
+
+// ---------- Ações no computador (pedidas pelo Jarvis) ----------
+// O servidor só manda nomes da lista dele ou links http(s); aqui confere de novo.
+
+const ALLOWED_APPS = new Set(['chrome', 'brave', 'msedge', 'excel', 'winword', 'powerpnt', 'outlook', 'calc', 'notepad', 'mspaint', 'explorer']);
+const ALLOWED_URIS = new Set(['ms-teams:', 'whatsapp:', 'spotify:', 'ms-settings:']);
+
+function openOnComputer({ kind, target }) {
+  if (kind === 'url' && /^https?:\/\/\S+$/i.test(target)) return shell.openExternal(target);
+  if (ALLOWED_URIS.has(target)) return shell.openExternal(target);
+  if (ALLOWED_APPS.has(target)) {
+    // "start" acha os programas registrados no Windows (Excel, Word, Chrome...).
+    spawn('cmd.exe', ['/d', '/s', '/c', `start "" ${target}`], { windowsVerbatimArguments: true, windowsHide: true, detached: true, stdio: 'ignore' }).unref();
+  }
+}
+
+const KEY_SCRIPT_PREFIX = "Add-Type -Namespace J -Name K -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte b, byte s, uint f, UIntPtr e);';";
+
+function pressCtrlV(done) {
+  const script = `${KEY_SCRIPT_PREFIX} [J.K]::keybd_event(0x11,0,0,[UIntPtr]::Zero); [J.K]::keybd_event(0x56,0,0,[UIntPtr]::Zero); [J.K]::keybd_event(0x56,0,2,[UIntPtr]::Zero); [J.K]::keybd_event(0x11,0,2,[UIntPtr]::Zero)`;
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true }, () => done());
+}
+
+/** Escreve o texto onde está o cursor: cola pela área de transferência e depois devolve o que estava lá. */
+function typeText(text) {
+  if (!text) return;
+  // Se a janela do Jarvis estiver na frente, sai do caminho pra o texto ir pro programa de antes.
+  if (win && !win.isDestroyed() && win.isFocused()) win.minimize();
+  setTimeout(() => {
+    const previous = clipboard.readText();
+    clipboard.writeText(String(text));
+    pressCtrlV(() => setTimeout(() => clipboard.writeText(previous), 400));
+  }, 450);
+}
+
+/** O servidor pergunta algo ao PC (ex: o texto copiado) e espera a resposta. */
+async function answerRpc({ id, kind }) {
+  let result = null;
+  let error = null;
+  if (kind === 'clipboard') result = clipboard.readText();
+  else error = 'Pergunta desconhecida.';
+  try {
+    await fetch(`${config.server}/api/desktop/rpc/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result, error }),
+    });
+  } catch {
+    // servidor fora do ar: ele desiste sozinho por tempo
+  }
 }
 
 // ---------- Modo compacto ----------
@@ -461,7 +515,7 @@ function ensureStartMenuShortcut() {
   }
 }
 
-function showReminder({ title, body, link }) {
+function showReminder({ kind, minutes, taskTitle, title, body, link }) {
   if (!Notification.isSupported()) return;
   const n = new Notification({ title: title || 'Lembrete', body: `${body || ''}${link ? '\nClique para abrir o link' : ''}`, icon: ICON, urgency: 'critical' });
   notifications.add(n);
@@ -474,6 +528,7 @@ function showReminder({ title, body, link }) {
   n.on('close', release);
   n.show();
   notifyMini('reminder', { title, body });
+  notifyRenderer('reminder', { kind, minutes, taskTitle, title, body, link });
 }
 
 // ---------- Canal de eventos do servidor (SSE) ----------

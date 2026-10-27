@@ -54,6 +54,63 @@ export function buildDigest(person, store, now = new Date()) {
   return lines.join('\n');
 }
 
+// ---------- Resumo do fim do dia ----------
+// Padrão 18:00 pra todo mundo (eveningTime vazio = desligado). Mostra o que foi feito hoje,
+// o que passou sem ser concluído e a agenda de amanhã.
+
+const DEFAULT_EVENING_TIME = '18:00';
+const EVENING_WINDOW_MIN = 120;
+
+export function buildEveningDigest(person, store, now = new Date()) {
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startTomorrow = new Date(startToday.getTime() + 86400000);
+  const startAfter = new Date(startToday.getTime() + 2 * 86400000);
+  const inRange = (iso, a, b) => iso && new Date(iso) >= a && new Date(iso) < b;
+  const all = store.listAll();
+
+  const done = all.filter((t) => t.status === 'done' && inRange(t.completedAt, startToday, startTomorrow));
+  const missed = all.filter((t) => t.status === 'pending' && inRange(t.dueAt, startToday, now));
+  const tomorrow = all.filter((t) => t.status === 'pending' && inRange(t.dueAt, startTomorrow, startAfter)).sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+  const olderOverdue = all.filter((t) => t.status === 'pending' && t.dueAt && new Date(t.dueAt) < startToday).length;
+
+  const lines = [`Fim de dia, ${person.displayName}! 🌙`, ''];
+  if (done.length) {
+    lines.push('Concluído hoje:');
+    for (const t of done.slice(0, LIST_CAP)) lines.push(`✅ ${t.title}`);
+    lines.push('');
+  }
+  if (missed.length) {
+    lines.push('Passou hoje e ainda está em aberto:');
+    for (const t of missed.slice(0, LIST_CAP)) lines.push(`⏳ ${formatTime(t.dueAt)} - ${t.title}`);
+    lines.push('');
+  }
+  if (tomorrow.length) {
+    lines.push('Amanhã:');
+    for (const t of tomorrow.slice(0, LIST_CAP)) lines.push(`📅 ${formatTime(t.dueAt)} - ${t.title}${t.link ? `\n🔗 ${t.link}` : ''}`);
+    if (tomorrow.length > LIST_CAP) lines.push(`(e mais ${tomorrow.length - LIST_CAP})`);
+    lines.push('');
+  } else {
+    lines.push('Amanhã está livre por enquanto.', '');
+  }
+  if (olderOverdue) lines.push(`Ainda há ${olderOverdue} atrasado(s) de dias anteriores.`, '');
+  lines.push(missed.length ? 'Se algo em aberto já foi feito, me avisa que eu marco como concluído. Bom descanso!' : 'Bom descanso!');
+  return lines.join('\n');
+}
+
+async function maybeSendEvening(person, store, now) {
+  const target = toMinutes(person.eveningTime === undefined ? DEFAULT_EVENING_TIME : person.eveningTime);
+  if (target === null) return;
+  if (person.lastEveningDate === dateKey(now)) return;
+  const sinceTarget = now.getHours() * 60 + now.getMinutes() - target;
+  if (sinceTarget < 0 || sinceTarget > EVENING_WINDOW_MIN) return;
+  try {
+    await sendProactive(person, buildEveningDigest(person, store, now), { remember: true });
+    updatePerson(person.id, { lastEveningDate: dateKey(now) });
+  } catch (err) {
+    console.error(`${TAG} [${person.id}] Falha ao enviar resumo do fim do dia:`, err.message);
+  }
+}
+
 async function maybeSendDigest(person, store, now) {
   const target = toMinutes(person.digestTime);
   if (target === null) return;
@@ -82,7 +139,7 @@ export function startPeopleScheduler() {
           if (task.link) lines.push(`🔗 Link: ${task.link}`);
           await sendProactive(person, lines.join('\n'));
           store.markLeadsSent(task.id, offsets);
-          pushToDesktop(person.id, { type: 'notify', kind: 'lead', title: `Faltam ${minutes} min`, body: `${task.title} às ${formatTime(task.dueAt)}`, link: task.link || '' });
+          pushToDesktop(person.id, { type: 'notify', kind: 'lead', minutes, taskTitle: task.title, title: `Faltam ${minutes} min`, body: `${task.title} às ${formatTime(task.dueAt)}`, link: task.link || '' });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete antecipado:`, err.message);
         }
@@ -94,13 +151,14 @@ export function startPeopleScheduler() {
           if (task.link) lines.push('', `🔗 ${task.link}`);
           await sendProactive(person, lines.join('\n'));
           store.markDueSent(task.id);
-          pushToDesktop(person.id, { type: 'notify', kind: 'due', title: 'É agora', body: task.title, link: task.link || '' });
+          pushToDesktop(person.id, { type: 'notify', kind: 'due', taskTitle: task.title, title: 'É agora', body: task.title, link: task.link || '' });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete:`, err.message);
         }
       }
 
       await maybeSendDigest(person, store, now);
+      await maybeSendEvening(person, store, now);
     }
   });
   console.log(`${TAG} Agendador (todas as pessoas) ativo — checagem a cada minuto.`);

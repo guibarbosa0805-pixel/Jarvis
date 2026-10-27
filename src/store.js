@@ -54,6 +54,11 @@ function makeStore(dataFile) {
       .sort((a, b) => (a.dueAt || '').localeCompare(b.dueAt || ''));
   }
 
+  /** Tudo, inclusive concluídas (pro resumo do fim do dia). */
+  function listAll() {
+    return readAll();
+  }
+
   function completeTask(id) {
     const tasks = readAll();
     const task = tasks.find((t) => t.id === id);
@@ -133,7 +138,7 @@ function makeStore(dataFile) {
     writeAll(tasks);
   }
 
-  return { addTask, listPending, completeTask, deleteTask, findDueLead, findDueLeads, findDueNow, markLeadSent, markLeadsSent, markDueSent };
+  return { addTask, listPending, listAll, completeTask, deleteTask, findDueLead, findDueLeads, findDueNow, markLeadSent, markLeadsSent, markDueSent };
 }
 
 /** Store para um nome de instância qualquer (usado pelo chat web do painel). */

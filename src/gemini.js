@@ -6,6 +6,7 @@ import { buildBriefingData } from './briefing.js';
 import { wavToOggOpus, isGreeting, spokenExcerpt, toWav } from './voice.js';
 import { searchMusic, searchLinks } from './music.js';
 import { createPairingCode, isDesktopOnline, pushToDesktop } from './desktop.js';
+import { webSearch, resolveOpenTarget, COMPUTER_APPS, readDesktopClipboard, findConflicts } from './skills.js';
 import { findPersonById, updatePerson } from './people.js';
 
 
@@ -98,6 +99,69 @@ export const tools = [
         description:
           'Gera um código de 6 dígitos (vale 10 minutos) para a pessoa conectar o app do Jarvis no computador dela. Use sempre que a pessoa falar em conectar/instalar/usar/vincular o Jarvis (ou "meu computador", "meu PC", "o app") no computador — mesmo sem dizer "Jarvis". Não pergunte o objetivo: gere o código direto.',
         parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: 'web_search',
+        description:
+          'Pesquisa na internet (Google) e devolve uma resposta curta com fontes. Use para fatos atuais ou que você não sabe: cotações, notícias, clima de outra cidade, resultados, horários de funcionamento, preços, endereços. Não use para a agenda da pessoa.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: { query: { type: Type.STRING, description: 'O que pesquisar, em português, bem específico (ex: "cotação do dólar comercial hoje").' } },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'open_on_computer',
+        description:
+          'Abre um programa ou site no computador da pessoa (app do Jarvis precisa estar aberto no PC). Programas conhecidos: Chrome, Brave, Edge, Excel, Word, PowerPoint, Outlook, Teams, WhatsApp, Spotify, Calculadora, Bloco de notas, Paint, Explorador de arquivos, Configurações. Site: passe o link completo (https://...).',
+        parameters: {
+          type: Type.OBJECT,
+          properties: { target: { type: Type.STRING, description: 'Nome do programa (ex: "Excel") ou link completo do site (ex: "https://youtube.com").' } },
+          required: ['target'],
+        },
+      },
+      {
+        name: 'type_on_computer',
+        description:
+          'Escreve um texto onde está o cursor no computador da pessoa (no programa que ela estiver usando), como se ela tivesse digitado. Use quando pedirem pra escrever/ditar/digitar algo no PC. Passe o texto final pronto, sem aspas.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: { text: { type: Type.STRING, description: 'Texto exato a ser escrito.' } },
+          required: ['text'],
+        },
+      },
+      {
+        name: 'read_computer_clipboard',
+        description:
+          'Lê o texto que a pessoa copiou (área de transferência) no computador. Use quando ela pedir pra resumir, traduzir, revisar, responder ou explicar "isso que eu copiei".',
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: 'get_profile',
+        description: 'Mostra o que você guardou sobre a pessoa (cidade, temas de interesse, fatos e preferências). Use quando perguntarem o que você sabe sobre ela.',
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: 'remove_from_profile',
+        description:
+          'Remove itens específicos do que você sabe sobre a pessoa, quando ela corrigir ou pedir pra esquecer só aquilo. Para trocar um valor, remova o antigo e use update_profile com o novo.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            city: { type: Type.BOOLEAN, description: 'true para esquecer a cidade.' },
+            interests: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Temas de interesse a remover (pode ser um trecho).' },
+            notes: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Fatos/preferências a remover (pode ser um trecho).' },
+          },
+        },
+      },
+      {
+        name: 'set_evening_summary',
+        description: 'Muda o horário do resumo do fim do dia (padrão 18:00) ou desliga. Use quando a pessoa pedir.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: { time: { type: Type.STRING, description: 'Horário HH:mm em 24h, ou vazio para desligar.' } },
+          required: ['time'],
+        },
       },
       {
         name: 'create_reminder',
@@ -201,6 +265,11 @@ Seu papel:
 - Música: você toca músicas no computador da pessoa, quando o app do Jarvis está aberto lá. Se pedirem música, artista ou um som pra ambientar (ex: "toca AC/DC", "põe um som pra focar"), chame play_music com a busca e responda curto e com bom humor dizendo o que está tocando (use o "title" do resultado). Para pausar, continuar, parar ou mudar o volume, use control_music. Se o resultado de play_music vier com playing_on null (nenhum PC conectado), explique que o app precisa estar aberto no computador e mande o "url" pra pessoa abrir. Se falhar, ofereça os links de busca (search_links).
 - WhatsApp e computador são a mesma conversa: o que é dito no app aparece copiado no WhatsApp (dá pra desligar com set_desktop_mirror), e o resumo da manhã e os lembretes aparecem nos dois. Mensagens "[Mensagem automática: ...]" no histórico são coisas que você mesmo mandou sozinho (ex: o resumo das 07:30) — se a pessoa responder sobre elas, continue de onde parou.
 - App do computador: se ${displayName} pedir pra usar/conectar o Jarvis no PC ou computador (inclusive frases curtas como "conectar meu computador" ou "quero usar no PC" — aqui "conectar o computador" sempre significa o app do Jarvis, nunca TV, monitor ou rede), chame connect_desktop_app sem fazer perguntas e passe o código de 6 dígitos (vale pelo tempo indicado em expiresInMinutes), explicando que é só abrir o app do Jarvis no computador e digitar o código. Mensagens com "[Canal: chamada de voz no app do Jarvis]" são uma ligação: a pessoa fala com você e ouve a resposta (a transcrição pode ter erros de ouvido, então interprete com bom senso). Responda como numa ligação telefônica: de 1 a 3 frases curtas e naturais, sem listas, emojis, asteriscos, números de item ou links (se precisar de um link, diga que deixou escrito na tela e inclua o link no texto). Mensagens com "[Canal: app do Jarvis no computador]" vêm do app, que lê suas respostas em voz alta: responda em texto simples (sem asteriscos nem emojis), curto e natural de ouvir — no máximo 3 ou 4 frases; se for uma lista (ex: agenda), diga os itens em frases corridas.
+- Conflito de horário: se create_reminder voltar "conflicts" não vazio, depois da confirmação avise numa linha (ex: "⚠️ Atenção: no mesmo horário você tem <título> às <hora>") e pergunte se quer manter os dois.
+- Pesquisa: para fatos atuais ou que você não sabe (cotação, notícias, clima de outra cidade, resultados, preços, endereços, horários de funcionamento), chame web_search e responda curto com o que veio; não invente números. Não pesquise o que é da agenda da pessoa.
+- Computador: com o app do Jarvis aberto no PC você consegue abrir programas e sites (open_on_computer), escrever um texto onde está o cursor (type_on_computer, com o texto final pronto) e ler o que a pessoa copiou (read_computer_clipboard — use quando ela pedir pra resumir, traduzir, revisar ou responder "isso que eu copiei"). Antes de uma reunião você avisa por voz no PC; se a pessoa disser "pode abrir"/"sim", abra o link da reunião com open_on_computer.
+- O que você sabe: se perguntarem o que você sabe sobre ela(e), chame get_profile e conte de forma natural. Para corrigir ou esquecer algo específico, use remove_from_profile (e update_profile com o valor novo). clear_memory só quando pedir para apagar tudo.
+- Resumo do fim do dia: todo dia às 18:00 (padrão) você manda um resumo do dia (o que foi concluído, o que ficou pendente e a agenda de amanhã). Se pedirem para mudar o horário ou desligar, use set_evening_summary.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
 Formato da confirmação (depois de um create_reminder com ok: true — use os valores de "formatted" exatamente como vieram, não calcule datas por conta própria):
@@ -285,6 +354,38 @@ export async function runFunction({ store, memory, flags, personId }, name, args
       if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
       return { ok: true, ...createPairingCode(personId), connected_now: isDesktopOnline(personId) };
     }
+    case 'web_search': {
+      const key = personId ? findPersonById(personId)?.geminiApiKey : null;
+      if (!key) return { ok: false, error: 'Pesquisa indisponível nesta conversa.' };
+      return webSearch(key, String(args.query || '').trim());
+    }
+    case 'open_on_computer': {
+      const resolved = resolveOpenTarget(args.target);
+      if (!resolved) return { ok: false, error: `Não sei abrir "${args.target}". Posso abrir: ${Object.keys(COMPUTER_APPS).join(', ')}, ou um link completo (https://...).` };
+      const sent = sendToDesktop({ personId, flags }, { type: 'open', ...resolved });
+      return sent ? { ok: true, opening: resolved.name || resolved.target } : { ok: false, error: NO_DESKTOP };
+    }
+    case 'type_on_computer': {
+      const text = String(args.text || '');
+      if (!text) return { ok: false, error: 'Diga o que escrever.' };
+      const sent = sendToDesktop({ personId, flags }, { type: 'type_text', text });
+      return sent ? { ok: true } : { ok: false, error: NO_DESKTOP };
+    }
+    case 'read_computer_clipboard':
+      return personId ? readDesktopClipboard(personId) : { ok: false, error: NO_DESKTOP };
+    case 'get_profile':
+      return memory ? { ok: true, profile: memory.getProfile() } : { ok: false, error: 'Memória indisponível nesta conversa.' };
+    case 'remove_from_profile': {
+      if (!memory) return { ok: false, error: 'Memória indisponível nesta conversa.' };
+      return { ok: true, ...memory.removeFromProfile({ city: !!args.city, interests: args.interests || [], notes: args.notes || [] }) };
+    }
+    case 'set_evening_summary': {
+      if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
+      const time = String(args.time || '').trim();
+      if (time && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(time)) return { ok: false, error: 'Horário inválido. Use HH:mm.' };
+      updatePerson(personId, { eveningTime: time });
+      return { ok: true, time: time || null, disabled: !time };
+    }
     case 'reply_with_voice':
       flags.voice = true;
       return { ok: true };
@@ -318,9 +419,11 @@ export async function runFunction({ store, memory, flags, personId }, name, args
         .map((m) => new Date(dueAt.getTime() - m * 60000))
         .filter((d) => d.getTime() > Date.now())
         .map((d) => formatTime(d.toISOString()));
+      const conflicts = findConflicts(store, task.dueAt, task.id).map((t) => ({ title: t.title, date: formatDateShort(t.dueAt), time: formatTime(t.dueAt) }));
       return {
         ok: true,
         task,
+        conflicts,
         formatted: {
           date_short: formatDateShort(task.dueAt),
           time: formatTime(task.dueAt),

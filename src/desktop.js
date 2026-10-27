@@ -146,6 +146,35 @@ export function isDesktopOnline(personId) {
   return (connections.get(personId)?.size ?? 0) > 0;
 }
 
+// --- Perguntas ao computador (ex: o que está copiado na área de transferência) ---
+// O servidor manda {type: 'rpc', id, kind} pelo canal de eventos e o app responde por POST.
+
+const rpcWaiting = new Map(); // id -> { personId, resolve, reject, timer }
+
+export function requestFromDesktop(personId, kind, timeoutMs = 6000) {
+  if (!isDesktopOnline(personId)) return Promise.reject(new Error('Nenhum computador conectado agora. O app do Jarvis precisa estar aberto no PC.'));
+  const id = randomBytes(8).toString('hex');
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      rpcWaiting.delete(id);
+      reject(new Error('O computador não respondeu a tempo.'));
+    }, timeoutMs);
+    rpcWaiting.set(id, { personId, resolve, reject, timer });
+    pushToDesktop(personId, { type: 'rpc', id, kind });
+  });
+}
+
+/** Resposta do app. Só vale vinda do computador da mesma pessoa. */
+export function resolveDesktopRequest(personId, id, result, error) {
+  const waiting = rpcWaiting.get(id);
+  if (!waiting || waiting.personId !== personId) return false;
+  rpcWaiting.delete(id);
+  clearTimeout(waiting.timer);
+  if (error) waiting.reject(new Error(String(error)));
+  else waiting.resolve(result);
+  return true;
+}
+
 /** Manda um evento aos computadores conectados da pessoa. Devolve quantos receberam. */
 export function pushToDesktop(personId, event) {
   const clients = connections.get(personId);
