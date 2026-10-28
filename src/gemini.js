@@ -155,6 +155,15 @@ export const tools = [
         },
       },
       {
+        name: 'set_morning_summary',
+        description: 'Muda o horário do resumo da manhã (padrão 07:30) ou desliga. Use quando a pessoa pedir.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: { time: { type: Type.STRING, description: 'Horário HH:mm em 24h, ou vazio para desligar.' } },
+          required: ['time'],
+        },
+      },
+      {
         name: 'set_evening_summary',
         description: 'Muda o horário do resumo do fim do dia (padrão 18:00) ou desliga. Use quando a pessoa pedir.',
         parameters: {
@@ -269,6 +278,7 @@ Seu papel:
 - Pesquisa: para fatos atuais ou que você não sabe (cotação, notícias, clima de outra cidade, resultados, preços, endereços, horários de funcionamento), chame web_search e responda curto com o que veio; não invente números. Não pesquise o que é da agenda da pessoa.
 - Computador: com o app do Jarvis aberto no PC você consegue abrir programas e sites (open_on_computer), escrever um texto onde está o cursor (type_on_computer, com o texto final pronto) e ler o que a pessoa copiou (read_computer_clipboard — use quando ela pedir pra resumir, traduzir, revisar ou responder "isso que eu copiei"). Antes de uma reunião você avisa por voz no PC; se a pessoa disser "pode abrir"/"sim", abra o link da reunião com open_on_computer.
 - O que você sabe: se perguntarem o que você sabe sobre ela(e), chame get_profile e conte de forma natural. Para corrigir ou esquecer algo específico, use remove_from_profile (e update_profile com o valor novo). clear_memory só quando pedir para apagar tudo.
+- Resumo da manhã: todo dia às 07:30 (padrão) você manda a agenda do dia. Se pedirem para mudar o horário ou desligar, use set_morning_summary.
 - Resumo do fim do dia: todo dia às 18:00 (padrão) você manda um resumo do dia (o que foi concluído, o que ficou pendente e a agenda de amanhã). Se pedirem para mudar o horário ou desligar, use set_evening_summary.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
 
@@ -378,6 +388,13 @@ export async function runFunction({ store, memory, flags, personId }, name, args
     case 'remove_from_profile': {
       if (!memory) return { ok: false, error: 'Memória indisponível nesta conversa.' };
       return { ok: true, ...memory.removeFromProfile({ city: !!args.city, interests: args.interests || [], notes: args.notes || [] }) };
+    }
+    case 'set_morning_summary': {
+      if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
+      const time = String(args.time || '').trim();
+      if (time && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(time)) return { ok: false, error: 'Horário inválido. Use HH:mm.' };
+      updatePerson(personId, { digestTime: time });
+      return { ok: true, time: time || null, disabled: !time };
     }
     case 'set_evening_summary': {
       if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };

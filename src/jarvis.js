@@ -124,7 +124,7 @@ export async function sendToPerson(jid, text) {
 export async function sendProactive(person, text, { remember = false } = {}) {
   await sendToPerson(person.jid, text);
   pushToDesktop(person.id, { type: 'chat', reply: text });
-  if (remember) await getBrain(person).recordProactive(text).catch(() => {});
+  if (remember) getBrain(person).recordProactive(text).catch(() => {});
 }
 
 /** Copia no WhatsApp uma troca feita no app do computador (a não ser que a pessoa tenha desligado). */
