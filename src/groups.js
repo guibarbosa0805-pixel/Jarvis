@@ -28,9 +28,17 @@ function defaultAlias(name) {
   return norm(name).split(' ')[0] || 'grupo';
 }
 
+function withDeadline(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export async function listJarvisGroups() {
   if (!transport) throw new Error('O WhatsApp do Jarvis não está conectado agora.');
-  return transport.list();
+  return withDeadline(transport.list(), 20000, 'O WhatsApp demorou demais para listar os grupos.');
 }
 
 export function linkedGroups(person) {
@@ -109,7 +117,7 @@ export async function sendToGroup(person, ref, text) {
     group = findLinkedGroup(findPersonById(person.id), linked.group.alias);
   }
   if (!transport) return { ok: false, error: 'O WhatsApp do Jarvis não está conectado agora.' };
-  await transport.send(group.jid, `${groupLabel(person)}\n${text}`);
+  await withDeadline(transport.send(group.jid, `${groupLabel(person)}\n${text}`), 20000, 'O WhatsApp demorou demais para enviar no grupo.');
   return { ok: true, group: group.name, alias: group.alias };
 }
 

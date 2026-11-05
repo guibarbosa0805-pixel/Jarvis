@@ -280,6 +280,16 @@ export const tools = [
 ];
 
 const RETRY_DELAYS_MS = [1500, 4000, 8000];
+const CALL_TIMEOUT_MS = 60000;
+
+/** Falha com "demorou demais" se a chamada não responder no prazo (não é repetida). */
+function withCallTimeout(promise, ms = CALL_TIMEOUT_MS) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error('O serviço de IA demorou demais para responder.'), { timeout: true })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 function isTransient(err) {
   const msg = String(err?.message || '');
@@ -598,7 +608,7 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
     const augmented = `[Data/hora atual: ${now}] [Canal: ${where}]\n${text}`;
     const message = image ? [augmented, createPartFromBase64(image.data, image.mimeType)] : augmented;
 
-    let response = await withRetry(() => chat.sendMessage({ message }));
+    let response = await withRetry(() => withCallTimeout(chat.sendMessage({ message })));
 
     let guard = 0;
     while (response.functionCalls?.length && guard < 5) {
@@ -608,7 +618,7 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
           createPartFromFunctionResponse(call.id ?? call.name, call.name, await runFunction({ store, memory, flags, personId }, call.name, call.args || {})),
         ),
       );
-      response = await withRetry(() => chat.sendMessage({ message: responseParts }));
+      response = await withRetry(() => withCallTimeout(chat.sendMessage({ message: responseParts })));
     }
 
     if (flags.wipe) {

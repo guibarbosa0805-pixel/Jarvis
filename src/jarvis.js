@@ -59,6 +59,23 @@ function withTimeout(promise, ms, message) {
 const PENDING_NOTICE =
   'Oi! Ainda não fui liberado pra conversar com você. Avisei o administrador — assim que ele te aprovar, a gente continua por aqui. 🙂';
 
+// Mensagens já tratadas (por id), pra uma mesma mensagem não ser respondida duas vezes.
+const handledIds = new Set();
+function alreadyHandled(msg) {
+  const id = msg.key?.id;
+  if (!id) return false;
+  if (handledIds.has(id)) return true;
+  handledIds.add(id);
+  if (handledIds.size > 500) handledIds.delete(handledIds.values().next().value);
+  return false;
+}
+
+/** Recebida há menos de 10 min (as que chegaram enquanto o Jarvis reiniciava). */
+function isRecentMessage(msg) {
+  const ts = Number(msg.messageTimestamp?.low ?? msg.messageTimestamp ?? 0) * 1000;
+  return ts > 0 && Date.now() - ts < 10 * 60 * 1000;
+}
+
 function isGroupOrBroadcast(jid) {
   return jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter');
 }
@@ -116,6 +133,7 @@ async function setTyping(jid, on) {
 function errorNotice(err, what) {
   const overloaded = err?.status === 503 || /UNAVAILABLE|high demand/i.test(String(err?.message));
   if (overloaded) return 'O serviço de IA está com muita demanda agora 🙃 tenta de novo em um minutinho.';
+  if (err?.timeout) return 'O serviço de IA está lento demais agora e não respondeu a tempo 🙃 tenta de novo em um minutinho.';
   return what ? `Deu um erro ao processar ${what} 🙃 tenta de novo.` : 'Deu um erro aqui do meu lado 🙃 tenta de novo.';
 }
 
@@ -247,10 +265,12 @@ export async function startJarvisConnection() {
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify') return;
+      if (type !== 'notify' && type !== 'append') return;
 
       for (const msg of messages) {
         if (!msg.message || msg.key.fromMe) continue;
+        if (type === 'append' && !isRecentMessage(msg)) continue;
+        if (alreadyHandled(msg)) continue;
         const jid = msg.key.remoteJid;
         if (!jid || isGroupOrBroadcast(jid)) continue;
 
