@@ -1,5 +1,6 @@
 import cron from 'node-cron';
-import { listPeople, updatePerson } from './people.js';
+import { listPeople, updatePerson, findPersonById } from './people.js';
+import { linkedGroups, buildGroupSummary, sendToGroup } from './groups.js';
 import { createStore } from './store.js';
 import { formatDateShort, formatTime, formatDateTimeFull } from './format.js';
 import { sendProactive } from './jarvis.js';
@@ -111,6 +112,32 @@ async function maybeSendEvening(person, store, now) {
   }
 }
 
+// ---------- Resumo da agenda compartilhada em cada grupo vinculado ----------
+// Só sai se houver algo compartilhado com aquele grupo; senão o grupo não recebe nada.
+async function maybeSendGroupSummaries(person, store, now) {
+  for (const group of linkedGroups(person)) {
+    const target = toMinutes(group.summaryTime);
+    if (target === null || group.lastSummaryDate === dateKey(now)) continue;
+    const sinceTarget = now.getHours() * 60 + now.getMinutes() - target;
+    if (sinceTarget < 0 || sinceTarget > EVENING_WINDOW_MIN) continue;
+    const markSent = () => {
+      const fresh = linkedGroups(findPersonById(person.id));
+      updatePerson(person.id, { groups: fresh.map((g) => (g.jid === group.jid ? { ...g, lastSummaryDate: dateKey(now) } : g)) });
+    };
+    const text = buildGroupSummary(group, store, now);
+    if (!text) {
+      markSent(); // nada compartilhado pra hoje/semana: não manda nada
+      continue;
+    }
+    try {
+      await sendToGroup(person, group.alias, text);
+      markSent();
+    } catch (err) {
+      console.error(`${TAG} [${person.id}] Falha ao enviar resumo no grupo ${group.name}:`, err.message);
+    }
+  }
+}
+
 async function maybeSendDigest(person, store, now) {
   const target = toMinutes(person.digestTime);
   if (target === null) return;
@@ -159,6 +186,7 @@ export function startPeopleScheduler() {
 
       await maybeSendDigest(person, store, now);
       await maybeSendEvening(person, store, now);
+      await maybeSendGroupSummaries(person, store, now);
     }
   });
   console.log(`${TAG} Agendador (todas as pessoas) ativo — checagem a cada minuto.`);

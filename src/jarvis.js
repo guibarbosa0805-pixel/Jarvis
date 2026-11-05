@@ -18,6 +18,20 @@ import { createBrain } from './gemini.js';
 import { createMemory } from './memory.js';
 import { hasLink, MAX_SPOKEN_CHARS } from './voice.js';
 import { pushToDesktop, approveDesktopRequest } from './desktop.js';
+import { setGroupTransport } from './groups.js';
+
+// Grupos onde o Jarvis participa (pra postar convites/resumos que a pessoa pedir).
+setGroupTransport({
+  async list() {
+    if (!sock) throw new Error('O WhatsApp do Jarvis não está conectado agora.');
+    const all = await sock.groupFetchAllParticipating();
+    return Object.values(all).map((g) => ({ jid: g.id, name: g.subject }));
+  },
+  async send(jid, text) {
+    if (!sock) throw new Error('O WhatsApp do Jarvis não está conectado agora.');
+    return sock.sendMessage(jid, { text: toWhatsappMarkdown(text) });
+  },
+});
 import { findPersonByJid, addOrTouchPending, markPendingNotified, addPerson, updatePerson, findDefaultGeminiKey } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

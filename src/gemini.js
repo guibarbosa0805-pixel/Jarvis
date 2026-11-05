@@ -7,6 +7,7 @@ import { wavToOggOpus, isGreeting, spokenExcerpt, toWav } from './voice.js';
 import { searchMusic, searchLinks } from './music.js';
 import { createPairingCode, isDesktopOnline, pushToDesktop } from './desktop.js';
 import { webSearch, resolveOpenTarget, COMPUTER_APPS, readDesktopClipboard, findConflicts } from './skills.js';
+import { listJarvisGroups, linkedGroups, linkGroup, unlinkGroup, sendToGroup, setGroupSummary, formatInvite } from './groups.js';
 import { findPersonById, updatePerson } from './people.js';
 
 
@@ -155,6 +156,56 @@ export const tools = [
         },
       },
       {
+        name: 'list_whatsapp_groups',
+        description: 'Mostra os grupos do WhatsApp vinculados (onde você pode postar) e os grupos em que o número do Jarvis está.',
+        parameters: { type: Type.OBJECT, properties: {} },
+      },
+      {
+        name: 'link_whatsapp_group',
+        description:
+          'Vincula um grupo do WhatsApp pra você poder postar nele quando a pessoa pedir (convites, recados, resumo da agenda compartilhada). O número do Jarvis precisa estar no grupo. Use quando ela pedir pra vincular/usar um grupo.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING, description: 'Nome (ou parte do nome) do grupo, como aparece no WhatsApp.' },
+            alias: { type: Type.STRING, description: 'Apelido curto pra chamar o grupo (ex: "telecom"). Opcional.' },
+            summary_time: { type: Type.STRING, description: 'Horário HH:mm pro resumo diário da agenda compartilhada nesse grupo. Opcional; vazio = sem resumo.' },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'unlink_whatsapp_group',
+        description: 'Desvincula um grupo (você para de postar nele).',
+        parameters: { type: Type.OBJECT, properties: { group: { type: Type.STRING, description: 'Apelido ou nome do grupo.' } }, required: ['group'] },
+      },
+      {
+        name: 'share_with_group',
+        description:
+          'Posta uma mensagem num grupo vinculado, em nome da pessoa (assinado como assistente dela). Só use quando ela pedir explicitamente pra mandar/compartilhar/avisar no grupo. Para compartilhar um compromisso que já existe, monte o texto com título, data, hora e link.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            group: { type: Type.STRING, description: 'Apelido ou nome do grupo vinculado.' },
+            text: { type: Type.STRING, description: 'Texto exato a postar (formatação de WhatsApp).' },
+            task_id: { type: Type.STRING, description: 'Se for um compromisso da agenda, o ID dele (passa a entrar no resumo do grupo). Opcional.' },
+          },
+          required: ['group', 'text'],
+        },
+      },
+      {
+        name: 'set_group_summary',
+        description: 'Liga, muda o horário ou desliga o resumo diário da agenda compartilhada num grupo vinculado.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            group: { type: Type.STRING, description: 'Apelido ou nome do grupo.' },
+            time: { type: Type.STRING, description: 'Horário HH:mm, ou vazio para desligar.' },
+          },
+          required: ['group', 'time'],
+        },
+      },
+      {
         name: 'set_morning_summary',
         description: 'Muda o horário do resumo da manhã (padrão 07:30) ou desliga. Use quando a pessoa pedir.',
         parameters: {
@@ -186,6 +237,11 @@ export const tools = [
             link: {
               type: Type.STRING,
               description: 'URL mencionada na mensagem original (link de reunião, evento, etc), se houver. Copie exatamente como veio.',
+            },
+            share_with_groups: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'Apelidos dos grupos vinculados onde postar o convite na hora (só se a pessoa pedir pra mandar/compartilhar com o grupo).',
             },
             lead_minutes: {
               type: Type.NUMBER,
@@ -278,6 +334,7 @@ Seu papel:
 - Pesquisa: para fatos atuais ou que você não sabe (cotação, notícias, clima de outra cidade, resultados, preços, endereços, horários de funcionamento), chame web_search e responda curto com o que veio; não invente números. Não pesquise o que é da agenda da pessoa.
 - Computador: com o app do Jarvis aberto no PC você consegue abrir programas e sites (open_on_computer), escrever um texto onde está o cursor (type_on_computer, com o texto final pronto) e ler o que a pessoa copiou (read_computer_clipboard — use quando ela pedir pra resumir, traduzir, revisar ou responder "isso que eu copiei"). Antes de uma reunião você avisa por voz no PC; se a pessoa disser "pode abrir"/"sim", abra o link da reunião com open_on_computer.
 - O que você sabe: se perguntarem o que você sabe sobre ela(e), chame get_profile e conte de forma natural. Para corrigir ou esquecer algo específico, use remove_from_profile (e update_profile com o valor novo). clear_memory só quando pedir para apagar tudo.
+- Grupos do WhatsApp: você pode postar em grupos que a pessoa vinculou (link_whatsapp_group; o número do Jarvis precisa estar no grupo). Só poste quando ela pedir explicitamente ("manda pro grupo", "compartilha com o pessoal do telecom"). Ao agendar algo e ela pedir pra mandar ao grupo, use create_reminder com share_with_groups; se o resultado trouxer shared_with_groups, confirme em uma linha onde postou (ou o erro). Para recados livres use share_with_group. Nunca poste no grupo nada pessoal que ela não pediu (outros compromissos, perfil, conversas). No grupo você não responde ninguém: só posta o que ela mandar. O resumo diário do grupo (set_group_summary) só inclui o que foi compartilhado com aquele grupo.
 - Resumo da manhã: todo dia às 07:30 (padrão) você manda a agenda do dia. Se pedirem para mudar o horário ou desligar, use set_morning_summary.
 - Resumo do fim do dia: todo dia às 18:00 (padrão) você manda um resumo do dia (o que foi concluído, o que ficou pendente e a agenda de amanhã). Se pedirem para mudar o horário ou desligar, use set_evening_summary.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
@@ -389,6 +446,46 @@ export async function runFunction({ store, memory, flags, personId }, name, args
       if (!memory) return { ok: false, error: 'Memória indisponível nesta conversa.' };
       return { ok: true, ...memory.removeFromProfile({ city: !!args.city, interests: args.interests || [], notes: args.notes || [] }) };
     }
+    case 'list_whatsapp_groups': {
+      const person = personId ? findPersonById(personId) : null;
+      if (!person) return { ok: false, error: 'Indisponível nesta conversa.' };
+      let available = [];
+      try {
+        available = (await listJarvisGroups()).map((g) => g.name);
+      } catch (err) {
+        available = [`(${err.message})`];
+      }
+      return { ok: true, linked: linkedGroups(person).map((g) => ({ alias: g.alias, name: g.name, summaryTime: g.summaryTime || null })), jarvis_groups: available };
+    }
+    case 'link_whatsapp_group': {
+      if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
+      const time = String(args.summary_time || '').trim();
+      if (time && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(time)) return { ok: false, error: 'Horário inválido. Use HH:mm.' };
+      try {
+        return await linkGroup(personId, args.name, args.alias, time);
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    }
+    case 'unlink_whatsapp_group':
+      return personId ? unlinkGroup(personId, args.group) : { ok: false, error: 'Indisponível nesta conversa.' };
+    case 'share_with_group': {
+      const person = personId ? findPersonById(personId) : null;
+      if (!person) return { ok: false, error: 'Indisponível nesta conversa.' };
+      try {
+        const sent = await sendToGroup(person, args.group, String(args.text || ''));
+        if (sent.ok && args.task_id) store.setTaskGroups(args.task_id, [sent.alias]);
+        return sent;
+      } catch (err) {
+        return { ok: false, error: `Não consegui postar no grupo: ${err.message}` };
+      }
+    }
+    case 'set_group_summary': {
+      if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
+      const time = String(args.time || '').trim();
+      if (time && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(time)) return { ok: false, error: 'Horário inválido. Use HH:mm.' };
+      return setGroupSummary(personId, args.group, time);
+    }
     case 'set_morning_summary': {
       if (!personId) return { ok: false, error: 'Indisponível nesta conversa.' };
       const time = String(args.time || '').trim();
@@ -436,11 +533,24 @@ export async function runFunction({ store, memory, flags, personId }, name, args
         .map((m) => new Date(dueAt.getTime() - m * 60000))
         .filter((d) => d.getTime() > Date.now())
         .map((d) => formatTime(d.toISOString()));
+      // Convite no grupo, na hora, se a pessoa pediu.
+      const shared = [];
+      const person = personId ? findPersonById(personId) : null;
+      for (const ref of Array.isArray(args.share_with_groups) ? args.share_with_groups : []) {
+        try {
+          const r = await sendToGroup(person, ref, formatInvite(task));
+          shared.push(r.ok ? { group: r.group, ok: true } : { group: ref, ok: false, error: r.error });
+          if (r.ok) store.setTaskGroups(task.id, [r.alias]);
+        } catch (err) {
+          shared.push({ group: ref, ok: false, error: err.message });
+        }
+      }
       const conflicts = findConflicts(store, task.dueAt, task.id).map((t) => ({ title: t.title, date: formatDateShort(t.dueAt), time: formatTime(t.dueAt) }));
       return {
         ok: true,
         task,
         conflicts,
+        shared_with_groups: shared,
         formatted: {
           date_short: formatDateShort(task.dueAt),
           time: formatTime(task.dueAt),

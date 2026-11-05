@@ -130,6 +130,16 @@ function makeStore(dataFile) {
     writeAll(tasks);
   }
 
+  /** Marca com quais grupos (apelidos) o compromisso foi compartilhado. */
+  function setTaskGroups(id, groups) {
+    const tasks = readAll();
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return null;
+    task.groups = [...new Set([...(task.groups || []), ...groups])];
+    writeAll(tasks);
+    return task;
+  }
+
   function markDueSent(id) {
     const tasks = readAll();
     const task = tasks.find((t) => t.id === id);
@@ -138,7 +148,7 @@ function makeStore(dataFile) {
     writeAll(tasks);
   }
 
-  return { addTask, listPending, listAll, completeTask, deleteTask, findDueLead, findDueLeads, findDueNow, markLeadSent, markLeadsSent, markDueSent };
+  return { addTask, listPending, listAll, setTaskGroups, completeTask, deleteTask, findDueLead, findDueLeads, findDueNow, markLeadSent, markLeadsSent, markDueSent };
 }
 
 /** Store para um nome de instância qualquer (usado pelo chat web do painel). */
