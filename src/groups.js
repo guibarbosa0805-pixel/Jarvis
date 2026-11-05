@@ -51,9 +51,12 @@ export function findLinkedGroup(person, ref) {
 export async function linkGroup(personId, name, alias, summaryTime = '') {
   const groups = await listJarvisGroups();
   const wanted = norm(name);
+  // Palavras que importam ("grupo telecom" -> ["telecom"]): todas precisam estar no nome do grupo.
+  const words = wanted.split(' ').filter((w) => w.length >= 3 && !['grupo', 'pessoal', 'galera', 'turma', 'com', 'dos', 'das'].includes(w));
   const match =
     groups.find((g) => norm(g.name) === wanted) ||
-    groups.find((g) => wanted && (norm(g.name).includes(wanted) || wanted.includes(norm(g.name))));
+    groups.find((g) => wanted && (norm(g.name).includes(wanted) || wanted.includes(norm(g.name)))) ||
+    (words.length ? groups.find((g) => words.every((w) => norm(g.name).includes(w))) : undefined);
   if (!match) {
     return {
       ok: false,
@@ -91,9 +94,19 @@ function groupLabel(person) {
 }
 
 export async function sendToGroup(person, ref, text) {
-  const group = findLinkedGroup(person, ref);
+  let group = findLinkedGroup(person, ref);
   if (!group) {
-    return { ok: false, error: `O grupo "${ref}" não está vinculado. Grupos vinculados: ${linkedGroups(person).map((g) => g.alias).join(', ') || 'nenhum'}.` };
+    // A pessoa pediu pra mandar num grupo onde o Jarvis está mas que ainda não foi vinculado:
+    // o próprio pedido já é a autorização, então vincula e segue.
+    const linked = await linkGroup(person.id, ref).catch(() => null);
+    if (!linked?.ok) {
+      return {
+        ok: false,
+        error: `Não achei o grupo "${ref}" entre os grupos do Jarvis. O número do Jarvis precisa estar no grupo.`,
+        jarvis_groups: linked?.jarvis_groups || [],
+      };
+    }
+    group = findLinkedGroup(findPersonById(person.id), linked.group.alias);
   }
   if (!transport) return { ok: false, error: 'O WhatsApp do Jarvis não está conectado agora.' };
   await transport.send(group.jid, `${groupLabel(person)}\n${text}`);
