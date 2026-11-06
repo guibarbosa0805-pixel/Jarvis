@@ -180,9 +180,22 @@ export const tools = [
         parameters: { type: Type.OBJECT, properties: { group: { type: Type.STRING, description: 'Apelido ou nome do grupo.' } }, required: ['group'] },
       },
       {
+        name: 'share_task_with_group',
+        description:
+          'Compartilha compromissos que já estão na agenda com um grupo vinculado: posta o convite (título, data, hora e link) e o compromisso passa a fazer parte da agenda do grupo, com lembretes lá também. Use sempre que a pessoa pedir pra mandar/compartilhar reuniões ou compromissos com o grupo (chame list_pending_tasks antes pra pegar os IDs). Nunca escreva o convite à mão.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            group: { type: Type.STRING, description: 'Apelido ou nome do grupo.' },
+            task_ids: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'IDs dos compromissos (de list_pending_tasks).' },
+          },
+          required: ['group', 'task_ids'],
+        },
+      },
+      {
         name: 'share_with_group',
         description:
-          'Posta uma mensagem num grupo vinculado, em nome da pessoa (assinado como assistente dela). Só use quando ela pedir explicitamente pra mandar/compartilhar/avisar no grupo. Para compartilhar um compromisso que já existe, monte o texto com título, data, hora e link.',
+          'Posta um RECADO livre num grupo vinculado, em nome da pessoa (assinado como assistente dela). Só use quando ela pedir explicitamente pra mandar/avisar algo no grupo. Para compromissos da agenda use share_task_with_group (nunca este).',
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -365,7 +378,7 @@ Seu papel:
 - Pesquisa: para fatos atuais ou que você não sabe (cotação, notícias, clima de outra cidade, resultados, preços, endereços, horários de funcionamento), chame web_search e responda curto com o que veio; não invente números. Não pesquise o que é da agenda da pessoa.
 - Computador: com o app do Jarvis aberto no PC você consegue abrir programas e sites (open_on_computer), escrever um texto onde está o cursor (type_on_computer, com o texto final pronto) e ler o que a pessoa copiou (read_computer_clipboard — use quando ela pedir pra resumir, traduzir, revisar ou responder "isso que eu copiei"). Antes de uma reunião você avisa por voz no PC; se a pessoa disser "pode abrir"/"sim", abra o link da reunião com open_on_computer.
 - O que você sabe: se perguntarem o que você sabe sobre ela(e), chame get_profile e conte de forma natural. Para corrigir ou esquecer algo específico, use remove_from_profile (e update_profile com o valor novo). clear_memory só quando pedir para apagar tudo.
-- Grupos do WhatsApp: você pode postar em grupos do WhatsApp onde o número do Jarvis está. Não precisa vincular antes: se a pessoa pedir pra mandar num grupo, passe o nome/apelido que ela usou (ex: "telecom") e o grupo é vinculado automaticamente. Só poste quando ela pedir explicitamente ("manda pro grupo", "compartilha com o pessoal do telecom"). Ao agendar algo e ela pedir pra mandar ao grupo, use create_reminder com share_with_groups; se o resultado trouxer shared_with_groups, confirme em uma linha onde postou (ou o erro). Para recados livres use share_with_group. Nunca poste no grupo nada pessoal que ela não pediu (outros compromissos, perfil, conversas). Nos grupos vinculados, quando alguém te chama (@Jarvis ou dizendo seu nome), um modo separado de você responde, sem acesso à agenda pessoal nem à memória dela; ela pode ligar/desligar isso com set_group_assistant. O resumo diário do grupo (set_group_summary) só inclui o que foi compartilhado com aquele grupo.
+- Grupos do WhatsApp: você pode postar em grupos do WhatsApp onde o número do Jarvis está. Não precisa vincular antes: se a pessoa pedir pra mandar num grupo, passe o nome/apelido que ela usou (ex: "telecom") e o grupo é vinculado automaticamente. Só poste quando ela pedir explicitamente ("manda pro grupo", "compartilha com o pessoal do telecom"). Ao agendar algo e ela pedir pra mandar ao grupo, use create_reminder com share_with_groups; se o resultado trouxer shared_with_groups, confirme em uma linha onde postou (ou o erro). Para compartilhar compromissos que já estão na agenda use share_task_with_group (com os IDs de list_pending_tasks) — ele monta o convite com o horário certo e o compromisso passa a gerar lembretes no grupo; nunca escreva convites à mão nem recrie o compromisso. Para recados livres use share_with_group. Datas e horas: use sempre os campos date/time que as funções devolvem, nunca calcule a partir de outros formatos. Nunca poste no grupo nada pessoal que ela não pediu (outros compromissos, perfil, conversas). Nos grupos vinculados, quando alguém te chama (@Jarvis ou dizendo seu nome), um modo separado de você responde, sem acesso à agenda pessoal nem à memória dela; ela pode ligar/desligar isso com set_group_assistant. O resumo diário do grupo (set_group_summary) só inclui o que foi compartilhado com aquele grupo.
 - Resumo da manhã: todo dia às 07:30 (padrão) você manda a agenda do dia. Se pedirem para mudar o horário ou desligar, use set_morning_summary.
 - Resumo do fim do dia: todo dia às 18:00 (padrão) você manda um resumo do dia (o que foi concluído, o que ficou pendente e a agenda de amanhã). Se pedirem para mudar o horário ou desligar, use set_evening_summary.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
@@ -397,6 +410,21 @@ Limites de comportamento (sempre, sem exceção):
 }
 
 const NO_DESKTOP = 'Nenhum computador conectado agora. O app do Jarvis precisa estar aberto no PC.';
+
+/** Tarefa como o modelo deve ver: data e hora locais prontas, sem o horário em UTC. */
+function taskView(t) {
+  if (!t) return t;
+  const view = { id: t.id, title: t.title, status: t.status };
+  if (t.dueAt) {
+    view.date = formatDateShort(t.dueAt);
+    view.weekday = new Date(t.dueAt).toLocaleDateString('pt-BR', { weekday: 'long' });
+    view.time = formatTime(t.dueAt);
+  }
+  if (t.link) view.link = t.link;
+  if (t.notes) view.notes = t.notes;
+  if (t.groups?.length) view.shared_with_groups = t.groups;
+  return view;
+}
 
 /**
  * Manda uma ação ao computador: no app vai junto da resposta (flags.actions); vindo de
@@ -500,12 +528,35 @@ export async function runFunction({ store, memory, flags, personId }, name, args
     }
     case 'unlink_whatsapp_group':
       return personId ? unlinkGroup(personId, args.group) : { ok: false, error: 'Indisponível nesta conversa.' };
+    case 'share_task_with_group': {
+      const person = personId ? findPersonById(personId) : null;
+      if (!person) return { ok: false, error: 'Indisponível nesta conversa.' };
+      const ids = Array.isArray(args.task_ids) ? args.task_ids : [];
+      const pendingById = new Map(store.listPending().map((t) => [t.id, t]));
+      const results = [];
+      for (const id of ids) {
+        const task = pendingById.get(id);
+        if (!task) {
+          results.push({ id, ok: false, error: 'Compromisso não encontrado (use os IDs de list_pending_tasks).' });
+          continue;
+        }
+        try {
+          const sent = await sendToGroup(person, args.group, formatInvite(task));
+          if (sent.ok) store.setTaskGroups(task.id, [sent.alias]);
+          results.push({ ...taskView(task), ok: sent.ok, group: sent.group, error: sent.error });
+        } catch (err) {
+          results.push({ id, ok: false, error: err.message });
+        }
+      }
+      return { ok: results.some((r) => r.ok), results };
+    }
     case 'share_with_group': {
       const person = personId ? findPersonById(personId) : null;
       if (!person) return { ok: false, error: 'Indisponível nesta conversa.' };
       try {
-        const sent = await sendToGroup(person, args.group, String(args.text || ''));
-        if (sent.ok && args.task_id) store.setTaskGroups(args.task_id, [sent.alias]);
+        const linkedTask = args.task_id ? store.listPending().find((t) => t.id === args.task_id) : null;
+        const sent = await sendToGroup(person, args.group, linkedTask ? formatInvite(linkedTask) : String(args.text || ''));
+        if (sent.ok && linkedTask) store.setTaskGroups(linkedTask.id, [sent.alias]);
         return sent;
       } catch (err) {
         return { ok: false, error: `Não consegui postar no grupo: ${err.message}` };
@@ -581,7 +632,7 @@ export async function runFunction({ store, memory, flags, personId }, name, args
       const conflicts = findConflicts(store, task.dueAt, task.id).map((t) => ({ title: t.title, date: formatDateShort(t.dueAt), time: formatTime(t.dueAt) }));
       return {
         ok: true,
-        task,
+        task: taskView(task),
         conflicts,
         shared_with_groups: shared,
         formatted: {
@@ -593,10 +644,10 @@ export async function runFunction({ store, memory, flags, personId }, name, args
       };
     }
     case 'list_pending_tasks':
-      return { ok: true, tasks: store.listPending() };
+      return { ok: true, tasks: store.listPending().map(taskView) };
     case 'complete_task': {
       const task = store.completeTask(args.id);
-      return task ? { ok: true, task } : { ok: false, error: 'Tarefa não encontrada.' };
+      return task ? { ok: true, task: taskView(task) } : { ok: false, error: 'Tarefa não encontrada.' };
     }
     case 'delete_task':
       return { ok: store.deleteTask(args.id) };
