@@ -1,7 +1,7 @@
 import express from 'express';
 import { config as loadEnv } from 'dotenv';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import {
   readdirSync,
   existsSync,
@@ -148,6 +148,25 @@ function stopInstance(name) {
 const app = express();
 // App do computador: autentica por token próprio, então vem antes da senha do painel.
 app.use('/api/desktop', createDesktopRouter());
+
+// Saúde do servidor (sem dados de ninguém): versão em execução, tempo no ar e estado do
+// WhatsApp do Jarvis. Serve pra conferir de fora se uma atualização entrou e se está conectado.
+const STARTED_AT = Date.now();
+let RUNNING_VERSION = '';
+try {
+  RUNNING_VERSION = execFileSync('git', ['-c', 'safe.directory=*', 'rev-parse', '--short', 'HEAD'], { cwd: ROOT, windowsHide: true }).toString().trim();
+} catch {
+  RUNNING_VERSION = 'desconhecida';
+}
+app.get('/api/health', (req, res) => {
+  const wa = readStatus('jarvis');
+  res.json({
+    version: RUNNING_VERSION,
+    uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
+    whatsapp: wa?.state || 'desconhecido',
+    whatsappSince: wa?.updatedAt || null,
+  });
+});
 app.use(requireAuth);
 app.use(express.json());
 app.use(express.static(`${ROOT}/public`));
