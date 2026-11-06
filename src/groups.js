@@ -95,6 +95,15 @@ export function setGroupSummary(personId, ref, time) {
   return { ok: true, group: group.name, time: time || null, disabled: !time };
 }
 
+/** Liga/desliga o Jarvis respondendo quando alguém chama ele no grupo (padrão: ligado). */
+export function setGroupAssistant(personId, ref, enabled) {
+  const person = findPersonById(personId);
+  const group = findLinkedGroup(person, ref);
+  if (!group) return { ok: false, error: 'Esse grupo não está vinculado.' };
+  updatePerson(personId, { groups: linkedGroups(person).map((g) => (g.jid === group.jid ? { ...g, assistant: enabled } : g)) });
+  return { ok: true, group: group.name, enabled };
+}
+
 /** Assinatura das mensagens no grupo: deixa claro que é o assistente de quem. */
 function groupLabel(person) {
   const first = String(person?.displayName || '').split(' ')[0];

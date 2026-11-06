@@ -19,6 +19,7 @@ import { createMemory } from './memory.js';
 import { hasLink, MAX_SPOKEN_CHARS } from './voice.js';
 import { pushToDesktop, approveDesktopRequest } from './desktop.js';
 import { setGroupTransport } from './groups.js';
+import { handleGroupMessage } from './group-assistant.js';
 
 // Grupos onde o Jarvis participa (pra postar convites/resumos que a pessoa pedir).
 setGroupTransport({
@@ -58,6 +59,16 @@ function withTimeout(promise, ms, message) {
 
 const PENDING_NOTICE =
   'Oi! Ainda não fui liberado pra conversar com você. Avisei o administrador — assim que ele te aprovar, a gente continua por aqui. 🙂';
+
+/** Números do próprio Jarvis (telefone e LID), pra saber quando ele foi marcado num grupo. */
+function jarvisIdentity() {
+  const ids = new Set();
+  for (const jid of [sock?.user?.id, sock?.user?.lid]) {
+    const n = String(jid || '').split(/[:@]/)[0];
+    if (n) ids.add(n);
+  }
+  return ids;
+}
 
 // Mensagens já tratadas (por id), pra uma mesma mensagem não ser respondida duas vezes.
 const handledIds = new Set();
@@ -272,6 +283,14 @@ export async function startJarvisConnection() {
         if (type === 'append' && !isRecentMessage(msg)) continue;
         if (alreadyHandled(msg)) continue;
         const jid = msg.key.remoteJid;
+        // Grupo vinculado: responde só quando chamarem o Jarvis (modo grupo, sem dados pessoais).
+        if (jid?.endsWith('@g.us')) {
+          handleGroupMessage(msg, {
+            jarvisIds: jarvisIdentity(),
+            reply: (text) => sock.sendMessage(jid, { text: toWhatsappMarkdown(text) }, { quoted: msg }),
+          }).catch((err) => console.error(`${TAG} Erro no grupo:`, err?.message || err));
+          continue;
+        }
         if (!jid || isGroupOrBroadcast(jid)) continue;
 
         let person = findPersonByJid(jid);
