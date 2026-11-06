@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { listPeople, updatePerson, findPersonById } from './people.js';
-import { linkedGroups, buildGroupSummary, sendToGroup } from './groups.js';
+import { linkedGroups, buildGroupSummary, sendToGroup, remindGroupsAboutTask } from './groups.js';
 import { createStore } from './store.js';
 import { formatDateShort, formatTime, formatDateTimeFull } from './format.js';
 import { sendProactive } from './jarvis.js';
@@ -112,6 +112,12 @@ async function maybeSendEvening(person, store, now) {
   }
 }
 
+function logGroupFailures(person, results) {
+  for (const r of results) {
+    if (!r.ok) console.error(`${TAG} [${person.id}] Falha ao avisar o grupo ${r.alias}:`, r.error);
+  }
+}
+
 // ---------- Resumo da agenda compartilhada em cada grupo vinculado ----------
 // Só sai se houver algo compartilhado com aquele grupo; senão o grupo não recebe nada.
 async function maybeSendGroupSummaries(person, store, now) {
@@ -166,6 +172,7 @@ export function startPeopleScheduler() {
           if (task.link) lines.push(`🔗 Link: ${task.link}`);
           await sendProactive(person, lines.join('\n'));
           store.markLeadsSent(task.id, offsets);
+          await logGroupFailures(person, await remindGroupsAboutTask(person, task, minutes));
           pushToDesktop(person.id, { type: 'notify', kind: 'lead', minutes, taskTitle: task.title, title: `Faltam ${minutes} min`, body: `${task.title} às ${formatTime(task.dueAt)}`, link: task.link || '' });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete antecipado:`, err.message);
@@ -178,6 +185,7 @@ export function startPeopleScheduler() {
           if (task.link) lines.push('', `🔗 ${task.link}`);
           await sendProactive(person, lines.join('\n'));
           store.markDueSent(task.id);
+          await logGroupFailures(person, await remindGroupsAboutTask(person, task, null));
           pushToDesktop(person.id, { type: 'notify', kind: 'due', taskTitle: task.title, title: 'É agora', body: task.title, link: task.link || '' });
         } catch (err) {
           console.error(`${TAG} [${person.id}] Falha ao enviar lembrete:`, err.message);

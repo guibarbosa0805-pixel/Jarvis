@@ -299,6 +299,15 @@ function isTransient(err) {
   return /UNAVAILABLE|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i.test(msg);
 }
 
+/** Quanto esperar antes de tentar de novo: no limite por minuto, o tempo que o Google pede. */
+function retryWait(err, attempt) {
+  if (err?.status === 429) {
+    const m = /retry in ([\d.]+)s/i.exec(String(err?.message)) || /"retryDelay":"(\d+)s"/.exec(String(err?.message));
+    if (m) return Math.min(40000, Math.ceil(Number(m[1]) * 1000) + 500);
+  }
+  return RETRY_DELAYS_MS[attempt];
+}
+
 /** Repete chamadas ao Gemini em falhas passageiras (ex: 503 "high demand"). */
 async function withRetry(fn) {
   for (let attempt = 0; ; attempt++) {
@@ -306,7 +315,7 @@ async function withRetry(fn) {
       return await fn();
     } catch (err) {
       if (attempt >= RETRY_DELAYS_MS.length || !isTransient(err)) throw err;
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+      await new Promise((resolve) => setTimeout(resolve, retryWait(err, attempt)));
     }
   }
 }

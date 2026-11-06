@@ -121,6 +121,32 @@ export async function sendToGroup(person, ref, text) {
   return { ok: true, group: group.name, alias: group.alias };
 }
 
+/** Lembrete de um compromisso compartilhado, no formato do grupo (minutes = null: é agora). */
+export function formatGroupReminder(task, minutes) {
+  const lines =
+    minutes == null
+      ? [`🔔 Começando agora: *${task.title}*`]
+      : [`⏰ Lembrete: faltam ${minutes} min!`, '', `📅 *${task.title}*`, `📆 ${formatDateShort(task.dueAt)} às ${formatTime(task.dueAt)}`];
+  if (task.link) lines.push(`🔗 ${task.link}`);
+  return lines.join('\n');
+}
+
+/**
+ * Repete nos grupos o lembrete de um compromisso compartilhado com eles (o mesmo que a pessoa
+ * recebe no privado). Falha num grupo não impede os outros.
+ */
+export async function remindGroupsAboutTask(person, task, minutes) {
+  const results = [];
+  for (const alias of Array.isArray(task.groups) ? task.groups : []) {
+    try {
+      results.push({ alias, ...(await sendToGroup(person, alias, formatGroupReminder(task, minutes))) });
+    } catch (err) {
+      results.push({ alias, ok: false, error: err.message });
+    }
+  }
+  return results;
+}
+
 /** Convite de um compromisso no formato do grupo. */
 export function formatInvite(task) {
   const lines = [`📅 *${task.title}*`, `📆 ${formatDateShort(task.dueAt)} às ${formatTime(task.dueAt)}`];
