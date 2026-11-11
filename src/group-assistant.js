@@ -44,6 +44,13 @@ export function isAddressedToJarvis(msg, jarvisIds) {
   return Boolean(mentioned || repliedToJarvis || named);
 }
 
+/** O remetente da mensagem é o dono (quem vinculou o grupo)? Compara telefone e LID. */
+export function isOwnerSender(msg, person) {
+  const mine = new Set([userPart(person.jid), ...(person.altIds || []).map(userPart)].filter(Boolean));
+  const sender = [msg.key?.participant, msg.key?.participantPn, msg.key?.participantLid, msg.participant].map(userPart).filter(Boolean);
+  return sender.some((id) => mine.has(id));
+}
+
 /** Tira as marcações "@5518..." do texto (o Jarvis já sabe que foi chamado). */
 export function cleanGroupText(text) {
   return String(text || '').replace(/@\d{6,}/g, '').replace(/\s+/g, ' ').trim();
@@ -70,6 +77,7 @@ function getGroupBrain(person, group) {
         group,
         store: createStore(person.id),
         memory: createMemory(`grupo-${userPart(group.jid)}`),
+        personId: person.id,
       }),
     );
   }
@@ -91,10 +99,11 @@ export async function handleGroupMessage(msg, { jarvisIds, reply }) {
     return false;
   }
 
-  const sender = msg.pushName || 'Alguém do grupo';
-  console.log(`${TAG} [grupo ${owner.group.alias}] Chamado por ${sender}.`);
+  const isOwner = isOwnerSender(msg, owner.person);
+  const sender = isOwner ? `${owner.person.displayName} (dono)` : msg.pushName || 'Alguém do grupo';
+  console.log(`${TAG} [grupo ${owner.group.alias}] Chamado por ${isOwner ? 'o dono' : 'um participante'}.`);
   try {
-    const answer = await getGroupBrain(owner.person, owner.group).reply(`[${sender}]: ${text}`);
+    const answer = await getGroupBrain(owner.person, owner.group).reply(`[${sender}]: ${text}`, { isOwner });
     if (answer) await reply(answer);
     return Boolean(answer);
   } catch (err) {
