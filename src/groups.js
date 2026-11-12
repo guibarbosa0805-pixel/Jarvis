@@ -41,6 +41,15 @@ export async function listJarvisGroups() {
   return withDeadline(transport.list(), 20000, 'O WhatsApp demorou demais para listar os grupos.');
 }
 
+/**
+ * Horário do resumo diário do grupo: o definido pra ele, senão o do resumo da manhã da pessoa
+ * (07:30 por padrão). null = a pessoa desligou o resumo daquele grupo.
+ */
+export function groupSummaryTime(group, person) {
+  if (group.summaryOff) return null;
+  return group.summaryTime || (person?.digestTime === undefined ? '07:30' : person.digestTime) || null;
+}
+
 export function linkedGroups(person) {
   return Array.isArray(person?.groups) ? person.groups : [];
 }
@@ -57,6 +66,7 @@ export function findLinkedGroup(person, ref) {
 }
 
 export async function linkGroup(personId, name, alias, summaryTime = '') {
+  // summaryTime vazio = padrão: o resumo do grupo sai no mesmo horário do resumo da manhã da pessoa.
   const groups = await listJarvisGroups();
   const wanted = norm(name);
   // Palavras que importam ("grupo telecom" -> ["telecom"]): todas precisam estar no nome do grupo.
@@ -73,10 +83,11 @@ export async function linkGroup(personId, name, alias, summaryTime = '') {
     };
   }
   const person = findPersonById(personId);
-  const entry = { alias: norm(alias) || defaultAlias(match.name), jid: match.jid, name: match.name, summaryTime: summaryTime || '' };
+  const previous = linkedGroups(person).find((g) => g.jid === match.jid);
+  const entry = { ...(previous || {}), alias: norm(alias) || defaultAlias(match.name), jid: match.jid, name: match.name, summaryTime: summaryTime || previous?.summaryTime || '' };
   const others = linkedGroups(person).filter((g) => g.jid !== match.jid && g.alias !== entry.alias);
   updatePerson(personId, { groups: [...others, entry] });
-  return { ok: true, group: { alias: entry.alias, name: entry.name, summaryTime: entry.summaryTime || null } };
+  return { ok: true, group: { alias: entry.alias, name: entry.name, summaryTime: groupSummaryTime(entry, person) } };
 }
 
 export function unlinkGroup(personId, ref) {
@@ -91,7 +102,8 @@ export function setGroupSummary(personId, ref, time) {
   const person = findPersonById(personId);
   const group = findLinkedGroup(person, ref);
   if (!group) return { ok: false, error: 'Esse grupo não está vinculado.' };
-  updatePerson(personId, { groups: linkedGroups(person).map((g) => (g.jid === group.jid ? { ...g, summaryTime: time } : g)) });
+  // time vazio desliga (summaryOff); com horário, liga nesse horário.
+  updatePerson(personId, { groups: linkedGroups(person).map((g) => (g.jid === group.jid ? { ...g, summaryTime: time || '', summaryOff: !time } : g)) });
   return { ok: true, group: group.name, time: time || null, disabled: !time };
 }
 

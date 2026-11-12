@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { listPeople, updatePerson, findPersonById } from './people.js';
-import { linkedGroups, buildGroupSummary, sendToGroup, remindGroupsAboutTask } from './groups.js';
+import { linkedGroups, groupSummaryTime, buildGroupSummary, sendToGroup, remindGroupsAboutTask } from './groups.js';
 import { createStore } from './store.js';
 import { formatDateShort, formatTime, formatDateTimeFull } from './format.js';
 import { sendProactive } from './jarvis.js';
@@ -120,9 +120,9 @@ function logGroupFailures(person, results) {
 
 // ---------- Resumo da agenda compartilhada em cada grupo vinculado ----------
 // Só sai se houver algo compartilhado com aquele grupo; senão o grupo não recebe nada.
-async function maybeSendGroupSummaries(person, store, now) {
+export async function maybeSendGroupSummaries(person, store, now) {
   for (const group of linkedGroups(person)) {
-    const target = toMinutes(group.summaryTime);
+    const target = toMinutes(groupSummaryTime(group, person));
     if (target === null || group.lastSummaryDate === dateKey(now)) continue;
     const sinceTarget = now.getHours() * 60 + now.getMinutes() - target;
     if (sinceTarget < 0 || sinceTarget > EVENING_WINDOW_MIN) continue;
