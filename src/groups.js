@@ -1,4 +1,5 @@
-import { findPersonById, updatePerson } from './people.js';
+import { findPersonById, listPeople, updatePerson } from './people.js';
+import { clearGroupHistory, countGroupMessages, DEFAULT_RETENTION_DAYS } from './group-history.js';
 import { formatDateShort, formatTime } from './format.js';
 
 // Grupos do WhatsApp onde o Jarvis posta em nome da pessoa (convites e resumo da agenda
@@ -105,6 +106,45 @@ export function setGroupSummary(personId, ref, time) {
   // time vazio desliga (summaryOff); com horário, liga nesse horário.
   updatePerson(personId, { groups: linkedGroups(person).map((g) => (g.jid === group.jid ? { ...g, summaryTime: time || '', summaryOff: !time } : g)) });
   return { ok: true, group: group.name, time: time || null, disabled: !time };
+}
+
+/** Pessoa e grupo vinculado a partir do jid do grupo (qualquer pessoa que o tenha vinculado). */
+export function findLinkedGroupByJid(groupJid) {
+  for (const person of listPeople()) {
+    const group = linkedGroups(person).find((g) => g.jid === groupJid);
+    if (group) return { person, group };
+  }
+  return null;
+}
+
+/**
+ * Liga/desliga a memória do histórico de texto do grupo (opt-in do dono). O aviso no grupo só
+ * é postado se a pessoa pedir (notify): quem combina isso com o grupo é ela.
+ */
+export async function setGroupHistory(personId, ref, enabled, days, notify = false) {
+  const person = findPersonById(personId);
+  const group = findLinkedGroup(person, ref);
+  if (!group) return { ok: false, error: 'Esse grupo não está vinculado.' };
+  const retention = Math.min(90, Math.max(1, Math.round(Number(days) || group.historyDays || DEFAULT_RETENTION_DAYS)));
+  const wasOn = group.history === true;
+  updatePerson(personId, { groups: linkedGroups(person).map((g) => (g.jid === group.jid ? { ...g, history: !!enabled, historyDays: retention } : g)) });
+  if (enabled && !wasOn && notify) {
+    try {
+      await sendToGroup(findPersonById(personId), group.alias, `Aviso: o Jarvis passou a guardar o *texto* das mensagens deste grupo por ${retention} dias, só para buscas e resumos que alguém pedir aqui (@Jarvis). Fotos, áudios e documentos não são guardados. ${person.displayName.split(' ')[0]} pode desligar quando quiser.`);
+    } catch (err) {
+      return { ok: true, group: group.name, enabled: true, days: retention, notice_error: err.message };
+    }
+  }
+  if (!enabled) clearGroupHistory(group.jid);
+  return { ok: true, group: group.name, enabled: !!enabled, days: retention, cleared: !enabled };
+}
+
+export function clearGroupHistoryFor(personId, ref) {
+  const group = findLinkedGroup(findPersonById(personId), ref);
+  if (!group) return { ok: false, error: 'Esse grupo não está vinculado.' };
+  const n = countGroupMessages(group.jid);
+  clearGroupHistory(group.jid);
+  return { ok: true, group: group.name, deleted: n };
 }
 
 /** Liga/desliga o Jarvis respondendo quando alguém chama ele no grupo (padrão: ligado). */

@@ -19,7 +19,7 @@ import { createMemory } from './memory.js';
 import { hasLink, MAX_SPOKEN_CHARS } from './voice.js';
 import { pushToDesktop, approveDesktopRequest } from './desktop.js';
 import { setGroupTransport } from './groups.js';
-import { handleGroupMessage } from './group-assistant.js';
+import { handleGroupMessage, recordIncomingGroupMessage } from './group-assistant.js';
 
 // Grupos onde o Jarvis participa (pra postar convites/resumos que a pessoa pedir).
 setGroupTransport({
@@ -285,9 +285,14 @@ export async function startJarvisConnection() {
         const jid = msg.key.remoteJid;
         // Grupo vinculado: responde só quando chamarem o Jarvis (modo grupo, sem dados pessoais).
         if (jid?.endsWith('@g.us')) {
+          try {
+            recordIncomingGroupMessage(msg); // só se o dono ligou o histórico desse grupo
+          } catch (err) {
+            console.error(`${TAG} Erro ao guardar mensagem do grupo:`, err?.message || err);
+          }
           handleGroupMessage(msg, {
             jarvisIds: jarvisIdentity(),
-            reply: (text) => sock.sendMessage(jid, { text: toWhatsappMarkdown(text) }, { quoted: msg }),
+            reply: (text, quoted) => sock.sendMessage(jid, { text: toWhatsappMarkdown(text) }, { quoted: quoted || msg }),
           }).catch((err) => console.error(`${TAG} Erro no grupo:`, err?.message || err));
           continue;
         }

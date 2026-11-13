@@ -2,6 +2,8 @@ import { listPeople } from './people.js';
 import { createStore } from './store.js';
 import { createMemory } from './memory.js';
 import { createGroupBrain } from './gemini.js';
+import { findLinkedGroupByJid } from './groups.js';
+import { recordGroupMessage, getGroupMessageById, DEFAULT_RETENTION_DAYS } from './group-history.js';
 
 // Jarvis respondendo dentro dos grupos vinculados, só quando é chamado: marcando @Jarvis,
 // respondendo a uma mensagem dele, ou começando a mensagem com "Jarvis". O resto da conversa
@@ -33,6 +35,29 @@ function contextInfoOf(message) {
 
 function textOf(message) {
   return message?.conversation || message?.extendedTextMessage?.text || message?.imageMessage?.caption || message?.videoMessage?.caption || '';
+}
+
+/** Segundos do WhatsApp (pode vir como Long) -> ms. */
+function timestampMs(msg) {
+  const ts = Number(msg.messageTimestamp?.low ?? msg.messageTimestamp ?? 0);
+  return ts > 0 ? ts * 1000 : Date.now();
+}
+
+/**
+ * Guarda o texto da mensagem se o histórico estiver ligado pra esse grupo (opt-in do dono).
+ * Só texto: mídia é ignorada.
+ */
+export function recordIncomingGroupMessage(msg) {
+  const groupJid = msg.key?.remoteJid;
+  const linked = findLinkedGroupByJid(groupJid);
+  if (!linked || linked.group.history !== true) return;
+  const text = textOf(msg.message);
+  if (!text || !msg.key?.id) return;
+  recordGroupMessage(
+    groupJid,
+    { id: msg.key.id, ts: timestampMs(msg), sender: msg.pushName || 'Participante', senderJid: msg.key.participant || '', text, mine: false },
+    linked.group.historyDays || DEFAULT_RETENTION_DAYS,
+  );
 }
 
 /** O Jarvis foi chamado nesta mensagem? jarvisIds: números do Jarvis (telefone e LID). */
@@ -103,9 +128,18 @@ export async function handleGroupMessage(msg, { jarvisIds, reply }) {
   const sender = isOwner ? `${owner.person.displayName} (dono)` : msg.pushName || 'Alguém do grupo';
   console.log(`${TAG} [grupo ${owner.group.alias}] Chamado por ${isOwner ? 'o dono' : 'um participante'}.`);
   try {
-    const answer = await getGroupBrain(owner.person, owner.group).reply(`[${sender}]: ${text}`, { isOwner });
-    if (answer) await reply(answer);
-    return Boolean(answer);
+    const { text: answer, quoteId } = await getGroupBrain(owner.person, owner.group).reply(`[${sender}]: ${text}`, { isOwner });
+    if (!answer) return false;
+    // "Marcar" uma mensagem = responder citando a original (se o Jarvis achou uma no histórico).
+    const original = quoteId ? getGroupMessageById(groupJid, quoteId) : null;
+    const quoted = original
+      ? { key: { remoteJid: groupJid, id: original.id, fromMe: Boolean(original.mine), participant: original.senderJid || undefined }, message: { conversation: original.text } }
+      : null;
+    await reply(answer, quoted);
+    if (owner.group.history === true) {
+      recordGroupMessage(groupJid, { id: `jarvis-${Date.now()}`, ts: Date.now(), sender: 'Jarvis', senderJid: '', text: answer, mine: true }, owner.group.historyDays || DEFAULT_RETENTION_DAYS);
+    }
+    return true;
   } catch (err) {
     console.error(`${TAG} [grupo ${owner.group.alias}] Erro ao responder:`, err?.message || err);
     const timeout = err?.timeout || err?.status === 503 || err?.status === 429;

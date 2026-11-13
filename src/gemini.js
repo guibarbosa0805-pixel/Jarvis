@@ -7,7 +7,8 @@ import { wavToOggOpus, isGreeting, spokenExcerpt, toWav } from './voice.js';
 import { searchMusic, searchLinks } from './music.js';
 import { createPairingCode, isDesktopOnline, pushToDesktop } from './desktop.js';
 import { webSearch, resolveOpenTarget, COMPUTER_APPS, readDesktopClipboard, findConflicts } from './skills.js';
-import { listJarvisGroups, linkedGroups, linkGroup, unlinkGroup, sendToGroup, setGroupSummary, setGroupAssistant, formatInvite } from './groups.js';
+import { listJarvisGroups, linkedGroups, linkGroup, unlinkGroup, sendToGroup, setGroupSummary, setGroupAssistant, setGroupHistory, clearGroupHistoryFor, findLinkedGroupByJid, formatInvite } from './groups.js';
+import { searchGroupMessages, getGroupMessages } from './group-history.js';
 import { findPersonById, updatePerson } from './people.js';
 
 
@@ -207,6 +208,26 @@ export const tools = [
         },
       },
       {
+        name: 'set_group_history',
+        description:
+          'Liga ou desliga a memória do histórico de TEXTO de um grupo vinculado, pra o Jarvis buscar mensagens e fazer resumos quando alguém pedir no grupo. Ao desligar, apaga o que guardou. O aviso no grupo só sai se a pessoa pedir (notify_group). Só passa a valer dali pra frente (não há mensagens antigas).',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            group: { type: Type.STRING, description: 'Apelido ou nome do grupo.' },
+            enabled: { type: Type.BOOLEAN, description: 'true = guardar o texto das mensagens; false = parar e apagar.' },
+            days: { type: Type.NUMBER, description: 'Quantos dias guardar (1 a 90, padrão 30). Opcional.' },
+            notify_group: { type: Type.BOOLEAN, description: 'true só se a pessoa pedir pra avisar o grupo de que o histórico foi ligado. Padrão false.' },
+          },
+          required: ['group', 'enabled'],
+        },
+      },
+      {
+        name: 'clear_group_history',
+        description: 'Apaga tudo o que foi guardado do histórico de um grupo (sem desligar o recurso).',
+        parameters: { type: Type.OBJECT, properties: { group: { type: Type.STRING, description: 'Apelido ou nome do grupo.' } }, required: ['group'] },
+      },
+      {
         name: 'set_group_assistant',
         description: 'Liga ou desliga o Jarvis respondendo quando alguém chama ele num grupo vinculado (marcando @Jarvis ou dizendo o nome).',
         parameters: {
@@ -378,7 +399,7 @@ Seu papel:
 - Pesquisa: para fatos atuais ou que você não sabe (cotação, notícias, clima de outra cidade, resultados, preços, endereços, horários de funcionamento), chame web_search e responda curto com o que veio; não invente números. Não pesquise o que é da agenda da pessoa.
 - Computador: com o app do Jarvis aberto no PC você consegue abrir programas e sites (open_on_computer), escrever um texto onde está o cursor (type_on_computer, com o texto final pronto) e ler o que a pessoa copiou (read_computer_clipboard — use quando ela pedir pra resumir, traduzir, revisar ou responder "isso que eu copiei"). Antes de uma reunião você avisa por voz no PC; se a pessoa disser "pode abrir"/"sim", abra o link da reunião com open_on_computer.
 - O que você sabe: se perguntarem o que você sabe sobre ela(e), chame get_profile e conte de forma natural. Para corrigir ou esquecer algo específico, use remove_from_profile (e update_profile com o valor novo). clear_memory só quando pedir para apagar tudo.
-- Grupos do WhatsApp: você pode postar em grupos do WhatsApp onde o número do Jarvis está. Não precisa vincular antes: se a pessoa pedir pra mandar num grupo, passe o nome/apelido que ela usou (ex: "telecom") e o grupo é vinculado automaticamente. Só poste quando ela pedir explicitamente ("manda pro grupo", "compartilha com o pessoal do telecom"). Ao agendar algo e ela pedir pra mandar ao grupo, use create_reminder com share_with_groups; se o resultado trouxer shared_with_groups, confirme em uma linha onde postou (ou o erro). Para compartilhar compromissos que já estão na agenda use share_task_with_group (com os IDs de list_pending_tasks) — ele monta o convite com o horário certo e o compromisso passa a gerar lembretes no grupo; nunca escreva convites à mão nem recrie o compromisso. Para recados livres use share_with_group. Datas e horas: use sempre os campos date/time que as funções devolvem, nunca calcule a partir de outros formatos. Nunca poste no grupo nada pessoal que ela não pediu (outros compromissos, perfil, conversas). Nos grupos vinculados, quando alguém te chama (@Jarvis ou dizendo seu nome), um modo separado de você responde, sem acesso à agenda pessoal nem à memória dela; ela pode ligar/desligar isso com set_group_assistant. Todo dia, no horário do resumo da manhã, cada grupo vinculado recebe o resumo da agenda compartilhada com ele (só o que foi compartilhado; se não houver nada, não manda); dá pra mudar o horário ou desligar com set_group_summary.
+- Grupos do WhatsApp: você pode postar em grupos do WhatsApp onde o número do Jarvis está. Não precisa vincular antes: se a pessoa pedir pra mandar num grupo, passe o nome/apelido que ela usou (ex: "telecom") e o grupo é vinculado automaticamente. Só poste quando ela pedir explicitamente ("manda pro grupo", "compartilha com o pessoal do telecom"). Ao agendar algo e ela pedir pra mandar ao grupo, use create_reminder com share_with_groups; se o resultado trouxer shared_with_groups, confirme em uma linha onde postou (ou o erro). Para compartilhar compromissos que já estão na agenda use share_task_with_group (com os IDs de list_pending_tasks) — ele monta o convite com o horário certo e o compromisso passa a gerar lembretes no grupo; nunca escreva convites à mão nem recrie o compromisso. Para recados livres use share_with_group. Datas e horas: use sempre os campos date/time que as funções devolvem, nunca calcule a partir de outros formatos. Nunca poste no grupo nada pessoal que ela não pediu (outros compromissos, perfil, conversas). Nos grupos vinculados, quando alguém te chama (@Jarvis ou dizendo seu nome), um modo separado de você responde, sem acesso à agenda pessoal nem à memória dela; ela pode ligar/desligar isso com set_group_assistant. Histórico dos grupos: se ela pedir pra você guardar/ter acesso ao histórico de um grupo (pra buscas e resumos), use set_group_history com enabled true — só vale dali pra frente; para parar e apagar, enabled false; para apagar sem desligar, clear_group_history. Todo dia, no horário do resumo da manhã, cada grupo vinculado recebe o resumo da agenda compartilhada com ele (só o que foi compartilhado; se não houver nada, não manda); dá pra mudar o horário ou desligar com set_group_summary.
 - Resumo da manhã: todo dia às 07:30 (padrão) você manda a agenda do dia. Se pedirem para mudar o horário ou desligar, use set_morning_summary.
 - Resumo do fim do dia: todo dia às 18:00 (padrão) você manda um resumo do dia (o que foi concluído, o que ficou pendente e a agenda de amanhã). Se pedirem para mudar o horário ou desligar, use set_evening_summary.
 - Quando vier uma imagem (foto, print, convite, flyer, documento), olhe o conteúdo e reaja a ele: se tiver data/horário/compromisso reconhecível, já ofereça (ou crie, se estiver claro) o lembrete com create_reminder; senão, comente brevemente o que viu e pergunte o que a pessoa precisa.
@@ -562,6 +583,10 @@ export async function runFunction({ store, memory, flags, personId }, name, args
         return { ok: false, error: `Não consegui postar no grupo: ${err.message}` };
       }
     }
+    case 'set_group_history':
+      return personId ? setGroupHistory(personId, args.group, !!args.enabled, args.days, !!args.notify_group) : { ok: false, error: 'Indisponível nesta conversa.' };
+    case 'clear_group_history':
+      return personId ? clearGroupHistoryFor(personId, args.group) : { ok: false, error: 'Indisponível nesta conversa.' };
     case 'set_group_assistant':
       return personId ? setGroupAssistant(personId, args.group, !!args.enabled) : { ok: false, error: 'Indisponível nesta conversa.' };
     case 'set_group_summary': {
@@ -867,8 +892,10 @@ function buildGroupInstruction(ownerName, groupName) {
   return `Você é o Jarvis, assistente pessoal de ${ownerName}, participando do grupo do WhatsApp "${groupName}". As pessoas do grupo te chamam marcando @Jarvis ou dizendo seu nome; cada mensagem chega como "[Nome da pessoa]: texto".
 
 Como agir no grupo:
-- Responda curto (1 a 4 frases), em português do Brasil, simpático e bem-humorado, chamando a pessoa pelo nome quando for natural.
+- Respostas curtas por padrão (1 a 4 frases); resumos e opiniões técnicas podem ser mais longos (até uns 15 linhas), bem organizados. Português do Brasil, simpático e bem-humorado, chamando a pessoa pelo nome quando for natural.
 - Você pode: responder dúvidas, dar ideias e sugestões, mandar frases motivacionais, pesquisar na internet (web_search, para fatos atuais como cotações, notícias, resultados) e mostrar a agenda compartilhada com este grupo (list_group_agenda).
+- Histórico do grupo: se o histórico estiver ligado, você lê o texto das mensagens que o grupo trocou desde que ele foi ligado. Para o resumo do dia ou de um período use get_chat_messages (sem parâmetros = hoje) e resuma por assunto, com decisões tomadas, pendências e quem ficou responsável, citando o nome de quem disse. Para achar algo ("quem falou do IP novo?", "onde mandaram o link do contrato?") use search_chat_history e, quando achar a mensagem certa, chame quote_message com o id dela: sua resposta aparece citando a mensagem original. O histórico pode ser ligado ou desligado a qualquer momento: nunca conclua pelo que foi dito antes na conversa, chame a função de novo a cada pedido. Nunca invente o que não está no histórico; se não achar ou o histórico estiver desligado ou vazio, diga isso com clareza (antes de ligado não há mensagens).
+- Opiniões técnicas: quando pedirem sua opinião técnica (redes, telecom, VoIP/SIP, infraestrutura, sistemas, cobrança, segurança, etc.), dê uma resposta de especialista: direta, com prós e contras, passos práticos, e diga quando não tiver certeza ou depender de informação que falta. Use web_search para dados atuais. Não invente números nem especificações.
 - Você NÃO tem acesso à agenda pessoal, à memória nem às conversas privadas de ${ownerName}, e nunca comenta sobre elas. Se perguntarem algo pessoal dele(a), diga com leveza que isso é só com ele(a).
 - Agendamento: quando a mensagem vem de ${ownerName} (aparece como "[${ownerName} (dono)]"), você agenda com create_reminder o que ele pedir (reunião, lembrete, ligação), usando título, data e hora exatos da mensagem e o link, se houver. O compromisso entra na agenda dele e na agenda deste grupo, e os lembretes saem nos dois lugares. Confirme em 2 ou 3 linhas curtas com título, data, hora e os lembretes (use os campos "formatted" do resultado). Se faltar data ou hora, pergunte.
 - Se QUALQUER OUTRA pessoa pedir para agendar, desmarcar ou mudar compromissos, explique com simpatia que quem agenda é ${ownerName}, e não chame create_reminder.
@@ -883,6 +910,35 @@ const groupTools = [
     functionDeclarations: [
       tools[0].functionDeclarations.find((d) => d.name === 'web_search'),
       tools[0].functionDeclarations.find((d) => d.name === 'create_reminder'),
+      {
+        name: 'search_chat_history',
+        description: 'Busca no histórico de texto deste grupo (só desde que o histórico foi ligado). Todas as palavras precisam aparecer na mensagem. Devolve as mais recentes primeiro, com id, data/hora, quem e o texto.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            query: { type: Type.STRING, description: 'Palavras-chave (ex: "ip banco", "contrato link").' },
+            days: { type: Type.NUMBER, description: 'Quantos dias pra trás olhar (padrão 30).' },
+            person: { type: Type.STRING, description: 'Só mensagens dessa pessoa (parte do nome). Opcional.' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'get_chat_messages',
+        description: 'Mensagens do grupo de um período, em ordem, pra resumir. Sem parâmetros = hoje. Use date (YYYY-MM-DD) pra outro dia ou hours pra "nas últimas N horas".',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            date: { type: Type.STRING, description: 'Dia no formato YYYY-MM-DD. Opcional.' },
+            hours: { type: Type.NUMBER, description: 'Últimas N horas. Opcional.' },
+          },
+        },
+      },
+      {
+        name: 'quote_message',
+        description: 'Faz a sua resposta aparecer citando (respondendo) uma mensagem específica do histórico. Passe o id vindo de search_chat_history ou get_chat_messages. Uma só por resposta.',
+        parameters: { type: Type.OBJECT, properties: { message_id: { type: Type.STRING, description: 'Id da mensagem.' } }, required: ['message_id'] },
+      },
       {
         name: 'list_group_agenda',
         description: 'Lista os próximos compromissos compartilhados com este grupo (só os do grupo, nunca os pessoais).',
@@ -903,7 +959,19 @@ export function createGroupBrain({ apiKey, model, ownerName, group, store, memor
   let chat = makeChat(memory?.loadHistory() ?? []);
   let queue = Promise.resolve();
 
-  async function runTool(name, args, isOwner) {
+  /** Histórico só existe se o dono ligou pra este grupo. */
+  function historyEnabled() {
+    return findLinkedGroupByJid(group.jid)?.group.history === true;
+  }
+
+  async function runTool(name, args, isOwner, ctx) {
+    if (name === 'search_chat_history' || name === 'get_chat_messages' || name === 'quote_message') {
+      if (!historyEnabled()) return { ok: false, error: 'O histórico deste grupo está desligado; só o dono pode ligar.' };
+      if (name === 'search_chat_history') return { ok: true, ...searchGroupMessages(group.jid, args.query, { days: args.days, person: args.person }) };
+      if (name === 'get_chat_messages') return { ok: true, ...getGroupMessages(group.jid, { date: args.date, hours: args.hours }) };
+      ctx.quoteId = String(args.message_id || '');
+      return { ok: true };
+    }
     if (name === 'create_reminder') {
       // Só o dono agenda (conferido aqui, não só na instrução do modelo).
       if (!isOwner) return { ok: false, error: `Só ${ownerName} pode agendar compromissos.` };
@@ -925,15 +993,24 @@ export function createGroupBrain({ apiKey, model, ownerName, group, store, memor
     return { ok: false, error: `Função indisponível no grupo: ${name}` };
   }
 
+  let lastHistoryFlag = null;
+
   async function turn(text, isOwner) {
+    const ctx = { quoteId: null };
+    const flag = findLinkedGroupByJid(group.jid)?.group.history === true;
+    if (lastHistoryFlag !== null && flag !== lastHistoryFlag) {
+      chat = makeChat([]);
+      memory?.clearHistory();
+    }
+    lastHistoryFlag = flag;
     const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
     let response = await withRetry(() => withCallTimeout(chat.sendMessage({ message: `[Data/hora atual: ${now}]\n${text}` })));
     for (let guard = 0; response.functionCalls?.length && guard < 4; guard++) {
-      const parts = await Promise.all(response.functionCalls.map(async (call) => createPartFromFunctionResponse(call.id ?? call.name, call.name, await runTool(call.name, call.args || {}, isOwner))));
+      const parts = await Promise.all(response.functionCalls.map(async (call) => createPartFromFunctionResponse(call.id ?? call.name, call.name, await runTool(call.name, call.args || {}, isOwner, ctx))));
       response = await withRetry(() => withCallTimeout(chat.sendMessage({ message: parts })));
     }
     memory?.saveHistory(chat.getHistory(true));
-    return response.text?.trim() || '';
+    return { text: response.text?.trim() || '', quoteId: ctx.quoteId };
   }
 
   return {
