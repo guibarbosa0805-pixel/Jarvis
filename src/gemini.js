@@ -894,7 +894,7 @@ function buildGroupInstruction(ownerName, groupName) {
 Como agir no grupo:
 - Respostas curtas por padrão (1 a 4 frases); resumos e opiniões técnicas podem ser mais longos (até uns 15 linhas), bem organizados. Português do Brasil, simpático e bem-humorado, chamando a pessoa pelo nome quando for natural.
 - Você pode: responder dúvidas, dar ideias e sugestões, mandar frases motivacionais, pesquisar na internet (web_search, para fatos atuais como cotações, notícias, resultados) e mostrar a agenda compartilhada com este grupo (list_group_agenda).
-- Histórico do grupo: se o histórico estiver ligado, você lê o texto das mensagens que o grupo trocou desde que ele foi ligado. Para o resumo do dia ou de um período use get_chat_messages (sem parâmetros = hoje) e resuma por assunto, com decisões tomadas, pendências e quem ficou responsável, citando o nome de quem disse. Para achar algo ("quem falou do IP novo?", "onde mandaram o link do contrato?") use search_chat_history e, quando achar a mensagem certa, chame quote_message com o id dela: sua resposta aparece citando a mensagem original. O histórico pode ser ligado ou desligado a qualquer momento: nunca conclua pelo que foi dito antes na conversa, chame a função de novo a cada pedido. Nunca invente o que não está no histórico; se não achar ou o histórico estiver desligado ou vazio, diga isso com clareza (antes de ligado não há mensagens).
+- Histórico do grupo: se o histórico estiver ligado, você lê o texto das mensagens que o grupo trocou desde que ele foi ligado. Para o resumo do dia ou de um período use get_chat_messages (sem parâmetros = hoje) e resuma por assunto, com decisões tomadas, pendências e quem ficou responsável, citando o nome de quem disse. Para achar algo ("quem falou do IP novo?", "onde mandaram o link do contrato?") use search_chat_history e, quando achar a mensagem certa, chame quote_message com o id dela: sua resposta aparece citando a mensagem original. Se o histórico estiver desligado e quem pediu for o dono (${ownerName}), diga que está desligado e pergunte se ele quer que você ligue agora (só vale dali pra frente); se ele pedir, use set_chat_history. Se for outra pessoa, diga que só o dono liga. O histórico pode ser ligado ou desligado a qualquer momento: nunca conclua pelo que foi dito antes na conversa, chame a função de novo a cada pedido. Nunca invente o que não está no histórico; se não achar ou o histórico estiver desligado ou vazio, diga isso com clareza (antes de ligado não há mensagens).
 - Opiniões técnicas: quando pedirem sua opinião técnica (redes, telecom, VoIP/SIP, infraestrutura, sistemas, cobrança, segurança, etc.), dê uma resposta de especialista: direta, com prós e contras, passos práticos, e diga quando não tiver certeza ou depender de informação que falta. Use web_search para dados atuais. Não invente números nem especificações.
 - Você NÃO tem acesso à agenda pessoal, à memória nem às conversas privadas de ${ownerName}, e nunca comenta sobre elas. Se perguntarem algo pessoal dele(a), diga com leveza que isso é só com ele(a).
 - Agendamento: quando a mensagem vem de ${ownerName} (aparece como "[${ownerName} (dono)]"), você agenda com create_reminder o que ele pedir (reunião, lembrete, ligação), usando título, data e hora exatos da mensagem e o link, se houver. O compromisso entra na agenda dele e na agenda deste grupo, e os lembretes saem nos dois lugares. Confirme em 2 ou 3 linhas curtas com título, data, hora e os lembretes (use os campos "formatted" do resultado). Se faltar data ou hora, pergunte.
@@ -910,6 +910,17 @@ const groupTools = [
     functionDeclarations: [
       tools[0].functionDeclarations.find((d) => d.name === 'web_search'),
       tools[0].functionDeclarations.find((d) => d.name === 'create_reminder'),
+      {
+        name: 'set_chat_history',
+        description: 'Liga ou desliga o histórico de texto DESTE grupo (só o dono pode; o resultado diz se foi permitido). Use quando o dono pedir pra ligar/desligar/apagar o histórico aqui.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            enabled: { type: Type.BOOLEAN, description: 'true = começar a guardar o texto das mensagens; false = parar e apagar.' },
+          },
+          required: ['enabled'],
+        },
+      },
       {
         name: 'search_chat_history',
         description: 'Busca no histórico de texto deste grupo (só desde que o histórico foi ligado). Todas as palavras precisam aparecer na mensagem. Devolve as mais recentes primeiro, com id, data/hora, quem e o texto.',
@@ -965,6 +976,10 @@ export function createGroupBrain({ apiKey, model, ownerName, group, store, memor
   }
 
   async function runTool(name, args, isOwner, ctx) {
+    if (name === 'set_chat_history') {
+      if (!isOwner) return { ok: false, error: `Só ${ownerName} pode ligar ou desligar o histórico.` };
+      return setGroupHistory(personId, group.alias, !!args.enabled, undefined, false);
+    }
     if (name === 'search_chat_history' || name === 'get_chat_messages' || name === 'quote_message') {
       if (!historyEnabled()) return { ok: false, error: 'O histórico deste grupo está desligado; só o dono pode ligar.' };
       if (name === 'search_chat_history') return { ok: true, ...searchGroupMessages(group.jid, args.query, { days: args.days, person: args.person }) };
