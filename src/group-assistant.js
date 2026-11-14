@@ -14,6 +14,12 @@ const MAX_REPLIES_PER_MINUTE = 6; // as respostas usam a cota do Gemini do dono 
 const brains = new Map(); // jid do grupo -> cérebro do grupo
 const recentReplies = new Map(); // jid do grupo -> horários das últimas respostas
 
+// Quando o Jarvis faz uma pergunta a alguém no grupo ("quer que eu ligue?"), a próxima mensagem
+// dessa mesma pessoa (até 2 min) conta como resposta a ele, sem precisar marcar @Jarvis.
+const FOLLOWUP_MS = 2 * 60 * 1000;
+const awaitingAnswer = new Map(); // "grupo|pessoa" -> prazo (ms)
+const followupKey = (msg) => `${msg.key?.remoteJid}|${userPart(msg.key?.participant) || msg.pushName || ''}`;
+
 /** Parte numérica de um jid ("5518...:12@s.whatsapp.net" -> "5518..."). */
 const userPart = (jid) => String(jid || '').split(/[:@]/)[0];
 
@@ -118,7 +124,11 @@ export async function handleGroupMessage(msg, { jarvisIds, reply }) {
   const owner = findGroupOwner(groupJid);
   if (!owner) return false; // grupo não vinculado (ou assistente desligado)
   const text = cleanGroupText(textOf(msg.message));
-  if (!text || !isAddressedToJarvis(msg, jarvisIds)) return false;
+  if (!text) return false;
+  const key = followupKey(msg);
+  const isFollowUp = (awaitingAnswer.get(key) || 0) > Date.now();
+  if (!isFollowUp && !isAddressedToJarvis(msg, jarvisIds)) return false;
+  awaitingAnswer.delete(key);
   if (!underRateLimit(groupJid)) {
     console.log(`${TAG} [grupo ${owner.group.alias}] Limite de respostas por minuto atingido; ignorando.`);
     return false;
@@ -136,6 +146,8 @@ export async function handleGroupMessage(msg, { jarvisIds, reply }) {
       ? { key: { remoteJid: groupJid, id: original.id, fromMe: Boolean(original.mine), participant: original.senderJid || undefined }, message: { conversation: original.text } }
       : null;
     await reply(answer, quoted);
+    // Terminou com pergunta: a resposta da pessoa vem sem marcar o Jarvis.
+    if (/\?\s*(?:[^\w\s]|\s)*$/u.test(answer.trim())) awaitingAnswer.set(key, Date.now() + FOLLOWUP_MS);
     if (owner.group.history === true) {
       recordGroupMessage(groupJid, { id: `jarvis-${Date.now()}`, ts: Date.now(), sender: 'Jarvis', senderJid: '', text: answer, mine: true }, owner.group.historyDays || DEFAULT_RETENTION_DAYS);
     }
