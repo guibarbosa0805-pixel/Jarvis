@@ -326,7 +326,29 @@ export const tools = [
 ];
 
 const RETRY_DELAYS_MS = [1500, 4000, 8000];
-const CALL_TIMEOUT_MS = 60000;
+const CALL_TIMEOUT_MS = 30000;
+
+// Saúde das chamadas ao modelo, exposta em /api/health pra eu conseguir diagnosticar de fora.
+export const llmStats = { calls: 0, ok: 0, timeouts: 0, rateLimited: 0, serverErrors: 0, failovers: 0, lastMs: 0, lastError: null, lastErrorAt: null, usingFallbackUntil: 0 };
+
+function noteCall(startedAt, err) {
+  llmStats.calls++;
+  llmStats.lastMs = Date.now() - startedAt;
+  if (!err) return void llmStats.ok++;
+  if (err.timeout) llmStats.timeouts++;
+  else if (err.status === 429) llmStats.rateLimited++;
+  else if ([500, 503, 504].includes(err.status)) llmStats.serverErrors++;
+  llmStats.lastError = err.timeout ? 'timeout' : String(err.status || err.message).slice(0, 80);
+  llmStats.lastErrorAt = new Date().toISOString();
+}
+
+/** Erro que vale tentar de novo noutro modelo (lentidão, limite, instabilidade ou modelo indisponível). */
+function shouldFailover(err) {
+  return Boolean(err?.timeout) || [404, 429, 500, 503, 504].includes(err?.status);
+}
+
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash';
+const FALLBACK_MS = 10 * 60 * 1000;
 
 /** Falha com "demorou demais" se a chamada não responder no prazo (não é repetida). */
 function withCallTimeout(promise, ms = CALL_TIMEOUT_MS) {
@@ -688,26 +710,59 @@ export async function runFunction({ store, memory, flags, personId }, name, args
 export function createBrain({ apiKey, model, displayName, store, channelLabel = 'no WhatsApp', memory = null, personId = null }) {
   const ai = new GoogleGenAI({ apiKey });
   const modelName = model || 'gemini-3.5-flash-lite';
+  let fallbackUntil = 0; // até quando usar o modelo reserva depois de uma falha do principal
+  const activeModel = () => (Date.now() < fallbackUntil ? FALLBACK_MODEL : modelName);
 
   const makeChat = (history) =>
     ai.chats.create({
-      model: modelName,
+      model: activeModel(),
       config: { systemInstruction: buildSystemInstruction(displayName, channelLabel, memory?.getProfile()), tools },
       history,
     });
+
+  /** Uma chamada ao modelo com prazo. Se o principal falhar por lentidão/limite/instabilidade, repete no reserva. */
+  async function modelCall(send) {
+    for (let attempt = 0; ; attempt++) {
+      const startedAt = Date.now();
+      try {
+        const result = await withRetry(() => withCallTimeout(send(chat)));
+        noteCall(startedAt);
+        return result;
+      } catch (err) {
+        noteCall(startedAt, err);
+        const canFailover = attempt === 0 && Date.now() >= fallbackUntil && shouldFailover(err) && FALLBACK_MODEL !== modelName;
+        if (!canFailover) throw err;
+        // Troca de modelo mantendo a conversa: o histórico do chat é reaproveitado.
+        console.error(`[jarvis] Modelo ${modelName} falhou (${err.timeout ? 'demorou' : err.status}); usando ${FALLBACK_MODEL} por 10 min.`);
+        llmStats.failovers++;
+        fallbackUntil = Date.now() + FALLBACK_MS;
+        llmStats.usingFallbackUntil = Math.max(llmStats.usingFallbackUntil, fallbackUntil);
+        chat = makeChat(chat.getHistory(true));
+      }
+    }
+  }
+
+  /** Passado o período no reserva, volta pro modelo principal (mesma conversa). */
+  function maybeReturnToPrimary() {
+    if (fallbackUntil && Date.now() >= fallbackUntil) {
+      fallbackUntil = 0;
+      chat = makeChat(chat.getHistory(true));
+    }
+  }
 
   const restored = memory?.loadHistory() ?? [];
   let restoredPending = restored.length > 0;
   let chat = makeChat(restored);
 
   async function runTurn(text, image, channel, call = false) {
+    maybeReturnToPrimary();
     const flags = { wipe: false, voice: false, channel, actions: [] };
     const now = new Date().toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
     const where = call ? 'chamada de voz no app do Jarvis' : channel === 'desktop' ? 'app do Jarvis no computador' : 'WhatsApp';
     const augmented = `[Data/hora atual: ${now}] [Canal: ${where}]\n${text}`;
     const message = image ? [augmented, createPartFromBase64(image.data, image.mimeType)] : augmented;
 
-    let response = await withRetry(() => withCallTimeout(chat.sendMessage({ message })));
+    let response = await modelCall((c) => c.sendMessage({ message }));
 
     let guard = 0;
     while (response.functionCalls?.length && guard < 5) {
@@ -717,7 +772,7 @@ export function createBrain({ apiKey, model, displayName, store, channelLabel = 
           createPartFromFunctionResponse(call.id ?? call.name, call.name, await runFunction({ store, memory, flags, personId }, call.name, call.args || {})),
         ),
       );
-      response = await withRetry(() => withCallTimeout(chat.sendMessage({ message: responseParts })));
+      response = await modelCall((c) => c.sendMessage({ message: responseParts }));
     }
 
     if (flags.wipe) {

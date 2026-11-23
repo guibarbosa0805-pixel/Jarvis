@@ -22,6 +22,7 @@ import { createDesktopRouter } from './desktop-api.js';
 import { revokeTokensOf } from './desktop.js';
 import { attachLiveServer } from './live.js';
 import { startAutoUpdate } from './updater.js';
+import { llmStats } from './gemini.js';
 import { listPeople, addPerson, updatePerson, removePerson, listPending, removePending, migrateDigestDefaults } from './people.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -165,6 +166,7 @@ app.get('/api/health', (req, res) => {
     uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
     whatsapp: wa?.state || 'desconhecido',
     whatsappSince: wa?.updatedAt || null,
+    llm: llmStats,
   });
 });
 app.use(requireAuth);
